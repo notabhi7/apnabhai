@@ -1,0 +1,8 @@
+{
+  "name": "ScholarPulse B.Tech Study Assistant",
+  "description": "Comprehensive engineering study companion featuring lecture notes organization, AI-powered summarization, quiz and flashcard generation, deadline tracking, personalized study schedules, performance analytics, and social study groups.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

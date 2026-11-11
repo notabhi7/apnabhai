@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'Fira Code', monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  code, pre {
+    font-family: var(--font-mono);
+  }
+}
+
+/* Feminine Theme Backgrounds & Overrides */
+.theme-midnight {
+  background-color: #0e070c;
+  color: #fff1f5;
+}
+
+.theme-dark {
+  background-color: #170d15;
+  color: #ffeef3;
+}
+
+.theme-light {
+  background-color: #fff6f8;
+  color: #2b1120;
+}
+
+.theme-sepia {
+  background-color: #24181a;
+  color: #f7ebe9;
+}
+
+/* Custom 3D Card Flip Perspective */
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.transform-style-3d {
+  transform-style: preserve-3d;
+}
+
+.backface-hidden {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.rotate-y-180 {
+  transform: rotateY(180deg);
+}
+
+/* Custom sleek rose scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(244, 63, 94, 0.35);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(244, 63, 94, 0.6);
+}
+
+/* Subtle feminine glow utilities */
+.glow-rose {
+  box-shadow: 0 0 25px -4px rgba(244, 63, 94, 0.4);
+}
+
+.glow-pink {
+  box-shadow: 0 0 25px -4px rgba(236, 72, 153, 0.4);
+}
+
+.glow-lavender {
+  box-shadow: 0 0 25px -4px rgba(192, 132, 252, 0.35);
+}
