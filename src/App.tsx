@@ -1,204 +1,91 @@
 import React, { useState } from 'react';
-import { AppProvider, useApp, AppTab } from './context/AppContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
+import { StudyProvider, useStudy } from './context/StudyContext';
 import { Navbar } from './components/layout/Navbar';
-import { Sidebar } from './components/layout/Sidebar';
-import { SearchModal } from './components/common/SearchModal';
-import { PomodoroModal } from './components/common/PomodoroModal';
-import { NewSubjectModal } from './components/common/NewSubjectModal';
-import { NoteEditorModal } from './components/common/NoteEditorModal';
-import { NewDeadlineModal } from './components/common/NewDeadlineModal';
-import { NewFlashcardModal } from './components/common/NewFlashcardModal';
-import { NewScheduleModal } from './components/common/NewScheduleModal';
+import { Footer } from './components/layout/Footer';
+import { AuthModal } from './components/modals/AuthModal';
+import { ToastContainer } from './components/common/ToastContainer';
 
-// Views
+// Page Views
+import { LandingPage } from './components/views/LandingPage';
 import { DashboardView } from './components/views/DashboardView';
-import { NotesView } from './components/views/NotesView';
-import { DeadlinesView } from './components/views/DeadlinesView';
-import { ScheduleView } from './components/views/ScheduleView';
-import { AIStudioView } from './components/views/AIStudioView';
+import { AITutorView } from './components/views/AITutorView';
+import { QuizGeneratorView } from './components/views/QuizGeneratorView';
+import { RevisionNotesView } from './components/views/RevisionNotesView';
 import { FlashcardsView } from './components/views/FlashcardsView';
-import { QuizView } from './components/views/QuizView';
-import { ResourcesView } from './components/views/ResourcesView';
-import { GroupsView } from './components/views/GroupsView';
-import { AnalyticsView } from './components/views/AnalyticsView';
-import { SettingsView } from './components/views/SettingsView';
-import { LectureNote } from './types';
-import { WifiOff, AlertTriangle } from 'lucide-react';
+import { AIConceptsView } from './components/views/AIConceptsView';
+import { StudyLibraryView } from './components/views/StudyLibraryView';
+import { ProfileSettingsView } from './components/views/ProfileSettingsView';
 
-const MainApp: React.FC = () => {
-  const { activeTab, isOnline, preferences } = useApp();
+const MainWorkspace: React.FC = () => {
+  const { activePage, setActivePage } = useStudy();
+  const { isAuthenticated } = useAuth();
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
 
-  // Mobile menu state
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-
-  // Modals
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [isPomodoroOpen, setIsPomodoroOpen] = useState(false);
-  const [isNewSubjectOpen, setIsNewSubjectOpen] = useState(false);
-  const [isNoteEditorOpen, setIsNoteEditorOpen] = useState(false);
-  const [noteToEdit, setNoteToEdit] = useState<LectureNote | null>(null);
-  const [isNewDeadlineOpen, setIsNewDeadlineOpen] = useState(false);
-  const [isNewFlashcardOpen, setIsNewFlashcardOpen] = useState(false);
-  const [isNewScheduleOpen, setIsNewScheduleOpen] = useState(false);
-
-  const handleEditNote = (note: LectureNote) => {
-    setNoteToEdit(note);
-    setIsNoteEditorOpen(true);
-  };
-
-  const handleCreateNote = () => {
-    setNoteToEdit(null);
-    setIsNoteEditorOpen(true);
-  };
-
-  const renderActiveView = () => {
-    switch (activeTab) {
-      case 'dashboard':
-        return (
-          <DashboardView
-            onOpenPomodoro={() => setIsPomodoroOpen(true)}
-            onOpenNewNote={handleCreateNote}
-          />
-        );
-      case 'notes':
-        return (
-          <NotesView
-            onOpenNewNoteModal={handleCreateNote}
-            onEditNoteModal={handleEditNote}
-          />
-        );
-      case 'deadlines':
-        return (
-          <DeadlinesView
-            onOpenNewDeadlineModal={() => setIsNewDeadlineOpen(true)}
-          />
-        );
-      case 'schedule':
-        return (
-          <ScheduleView
-            onOpenPomodoro={() => setIsPomodoroOpen(true)}
-            onOpenNewScheduleModal={() => setIsNewScheduleOpen(true)}
-          />
-        );
-      case 'ai-studio':
-        return <AIStudioView />;
-      case 'flashcards':
-        return (
-          <FlashcardsView
-            onOpenNewFlashcardModal={() => setIsNewFlashcardOpen(true)}
-          />
-        );
-      case 'quiz':
-        return <QuizView />;
-      case 'resources':
-        return <ResourcesView />;
-      case 'groups':
-        return <GroupsView />;
-      case 'analytics':
-        return <AnalyticsView />;
-      case 'settings':
-        return <SettingsView />;
-      default:
-        return (
-          <DashboardView
-            onOpenPomodoro={() => setIsPomodoroOpen(true)}
-            onOpenNewNote={handleCreateNote}
-          />
-        );
+  const handleGetStarted = () => {
+    if (!isAuthenticated) {
+      setIsAuthOpen(true);
+    } else {
+      setActivePage('dashboard');
     }
   };
 
-  // Determine theme background classes with feminine aesthetics
-  const themeBg =
-    preferences.theme === 'midnight'
-      ? 'bg-[#0e070c] text-[#fff1f5]'
-      : preferences.theme === 'light'
-      ? 'bg-[#fff6f8] text-[#2b1120]'
-      : preferences.theme === 'sepia'
-      ? 'bg-[#24181a] text-[#f7ebe9]'
-      : 'bg-[#170d15] text-[#ffeef3]';
+  const renderActiveView = () => {
+    switch (activePage) {
+      case 'landing':
+        return <LandingPage onGetStarted={handleGetStarted} />;
+      case 'dashboard':
+        return <DashboardView />;
+      case 'ai-tutor':
+        return <AITutorView />;
+      case 'quiz-generator':
+        return <QuizGeneratorView />;
+      case 'revision-notes':
+        return <RevisionNotesView />;
+      case 'flashcards':
+        return <FlashcardsView />;
+      case 'ai-concepts':
+        return <AIConceptsView />;
+      case 'study-library':
+        return <StudyLibraryView />;
+      case 'profile-settings':
+        return <ProfileSettingsView />;
+      default:
+        return <DashboardView />;
+    }
+  };
 
   return (
-    <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 ${themeBg}`}>
-      {/* Offline Mode Banner if active */}
-      {!isOnline && (
-        <div className="bg-amber-600/90 text-white text-xs px-4 py-1.5 flex items-center justify-between z-50">
-          <div className="flex items-center gap-2">
-            <WifiOff className="w-3.5 h-3.5" />
-            <span>
-              <strong>Offline Mode Active:</strong> All changes are stored locally in Indexed/LocalStorage and will auto-replicate to your devices when online.
-            </span>
-          </div>
-          <span className="text-[10px] font-mono uppercase bg-amber-700 px-1.5 py-0.5 rounded">
-            Local Safe
-          </span>
-        </div>
-      )}
-
+    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors selection:bg-blue-500 selection:text-white">
       {/* Top Navbar */}
-      <Navbar
-        onOpenMobileMenu={() => setIsMobileMenuOpen(true)}
-        onOpenSearch={() => setIsSearchOpen(true)}
-        onOpenPomodoro={() => setIsPomodoroOpen(true)}
-      />
+      <Navbar onOpenAuth={() => setIsAuthOpen(true)} />
 
-      {/* Main Workspace Body with Sidebar & View */}
-      <div className="flex-1 flex max-w-[1720px] w-full mx-auto">
-        <Sidebar
-          isOpenMobile={isMobileMenuOpen}
-          onCloseMobile={() => setIsMobileMenuOpen(false)}
-          onOpenNewSubject={() => setIsNewSubjectOpen(true)}
-        />
+      {/* Main Workspace Body */}
+      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8">
+        {renderActiveView()}
+      </main>
 
-        <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto max-w-full">
-          {renderActiveView()}
-        </main>
-      </div>
+      {/* Educational Platform Footer */}
+      <Footer />
 
-      {/* Global Modals */}
-      <SearchModal
-        isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
-      />
+      {/* Auth Modal (Login / Signup / Guest) */}
+      <AuthModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} />
 
-      <PomodoroModal
-        isOpen={isPomodoroOpen}
-        onClose={() => setIsPomodoroOpen(false)}
-      />
-
-      <NewSubjectModal
-        isOpen={isNewSubjectOpen}
-        onClose={() => setIsNewSubjectOpen(false)}
-      />
-
-      <NoteEditorModal
-        isOpen={isNoteEditorOpen}
-        onClose={() => setIsNoteEditorOpen(false)}
-        noteToEdit={noteToEdit}
-      />
-
-      <NewDeadlineModal
-        isOpen={isNewDeadlineOpen}
-        onClose={() => setIsNewDeadlineOpen(false)}
-      />
-
-      <NewFlashcardModal
-        isOpen={isNewFlashcardOpen}
-        onClose={() => setIsNewFlashcardOpen(false)}
-      />
-
-      <NewScheduleModal
-        isOpen={isNewScheduleOpen}
-        onClose={() => setIsNewScheduleOpen(false)}
-      />
+      {/* Global Toast Alerts */}
+      <ToastContainer />
     </div>
   );
 };
 
 export default function App() {
   return (
-    <AppProvider>
-      <MainApp />
-    </AppProvider>
+    <AuthProvider>
+      <ThemeProvider>
+        <StudyProvider>
+          <MainWorkspace />
+        </StudyProvider>
+      </ThemeProvider>
+    </AuthProvider>
   );
 }

@@ -19,18 +19,7 @@ app.use(express.json({ limit: '10mb' }));
 // Initialize GoogleGenAI client server-side with telemetry header
 const apiKey = process.env.GEMINI_API_KEY;
 let ai: GoogleGenAI | null = null;
-if (apiKey) {
-  ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-}
 
-// Helper to check AI availability
 function getAIClient(): GoogleGenAI | null {
   if (!ai && process.env.GEMINI_API_KEY) {
     ai = new GoogleGenAI({
@@ -45,614 +34,539 @@ function getAIClient(): GoogleGenAI | null {
   return ai;
 }
 
-// 1. API: Summarize Lecture Notes
-app.post('/api/ai/summarize', async (req: Request, res: Response) => {
+// 1. API: AI Tutor - Topic Explanation
+app.post('/api/ai/explain', async (req: Request, res: Response) => {
   try {
-    const { noteTitle, subject, content, style = 'exam_cheatsheet' } = req.body;
-    if (!content || !content.trim()) {
-      res.status(400).json({ error: 'Note content is required.' });
+    const { topic, difficulty = 'Intermediate', style = 'Analogy-Rich', extraContext = '' } = req.body;
+    if (!topic || !topic.trim()) {
+      res.status(400).json({ error: 'Topic is required' });
       return;
     }
 
     const client = getAIClient();
     if (!client) {
-      // Graceful intelligent fallback for B.Tech students if API key not yet configured
+      // Demo / fallback response
       res.json({
-        summary: `### Quick Revision Summary: ${noteTitle || 'Engineering Module'} (${subject || 'Core Engineering'})\n\n` +
-          `**Core Theoretical Concept:**\n` +
-          `This topic covers the fundamental algorithmic paradigms and hardware-software interaction layers critical for university semester exams and technical interview rounds.\n\n` +
-          `**Key Takeaways & Formulas:**\n` +
-          `- Time Complexity & Bottlenecks: Analyze best, average, and worst-case bounds carefully.\n` +
-          `- Architectural Tradeoffs: Space vs. Time tradeoffs dictate practical implementation.\n` +
-          `- Edge Cases to Remember: Null pointers, boundary constraints, overflow/underflow checks.\n\n` +
-          `**Exam High-Yield Tips:**\n` +
-          `Always write the step-by-step pseudo-code and draw the state transition / data flow diagram for 10-mark questions.`,
-        keyFormulas: [
-          'Master Theorem: T(n) = aT(n/b) + f(n)',
-          'Amortized Cost Analysis: O(1) amortized insertion in dynamic arrays',
-          'Amdahl\'s Law: Speedup = 1 / ((1 - p) + p/s)'
+        topic,
+        difficulty,
+        style,
+        title: `Understanding ${topic}`,
+        introduction: `${topic} is a cornerstone concept. At a ${difficulty.toLowerCase()} level, it represents a structured mechanism designed to solve complex challenges through foundational principles.`,
+        analogy: `Think of ${topic} like a modern orchestra conductor: each musician (component) knows their instrument, but the conductor ensures seamless synchronization and prevents chaos.`,
+        coreMechanics: [
+          `Key Invariant: The fundamental rule that must hold true at all stages of ${topic}.`,
+          `Data & Control Flow: How inputs are transformed into outputs step-by-step.`,
+          `Practical Trade-off: High efficiency often requires balancing resource consumption against latency.`
         ],
-        bulletPoints: [
-          'Understand primary definitions and formal invariants.',
-          'Memorize derivation steps for university theory papers.',
-          'Review standard interview corner cases and complexity classes.'
+        codeOrFormula: `// Conceptual snippet for ${topic}\nfunction explainConcept(input) {\n  const verified = validate(input);\n  return transform(verified);\n}`,
+        commonMisconceptions: [
+          `Assuming ${topic} can be applied indiscriminately without understanding the underlying constraints.`,
+          `Confusing the high-level theoretical abstraction with the specific implementation details.`
         ],
-        mode: style,
-        fallback: true
+        summary: `Mastering ${topic} unlocks the ability to design resilient architectures and reason systematically about modern systems.`,
+        disclaimer: 'AI-generated educational explanation. Please verify critical facts and exam-specific details with primary textbooks and verified course materials.'
       });
       return;
     }
 
-    const prompt = `You are an elite B.Tech Engineering Professor and Exam Specialist.
-Analyze and summarize the following lecture notes for the subject "${subject || 'Engineering'}" and topic "${noteTitle || 'Topic'}".
-Formatting Style requested: "${style}" (Options: exam_cheatsheet, comprehensive, key_concepts, or code_walkthrough).
+    const prompt = `You are an elite academic tutor for "AI Study Buddy".
+Explain the topic "${topic}" thoroughly to a student.
+Target Difficulty: ${difficulty} (Options: Beginner, Intermediate, Advanced)
+Explanation Style: ${style} (Options: Analogy-Rich, Technical & Formal, Socratic & Conceptual, Executive Summary)
+${extraContext ? `Context or Specific Question: ${extraContext}` : ''}
 
-Lecture Content:
-${content}
-
-Provide your response strictly in valid JSON with this structure:
+Respond STRICTLY in valid JSON matching this schema:
 {
-  "summary": "Rich markdown formatted summary optimized for quick engineering revision",
-  "keyFormulas": ["List of critical equations, theorems, or complexity bounds"],
-  "bulletPoints": ["List of 4-6 high-yield exam bullet points"],
-  "commonExamMistakes": ["2-3 common traps students lose marks on in semester exams"]
+  "topic": "${topic}",
+  "difficulty": "${difficulty}",
+  "style": "${style}",
+  "title": "Clear educational title",
+  "introduction": "Engaging introduction breaking down what this is and why it matters",
+  "analogy": "Memorable, intuitive real-world analogy",
+  "coreMechanics": ["Step 1 / Core principle", "Step 2 / Mechanism", "Step 3 / Nuance"],
+  "codeOrFormula": "Illustrative code snippet, formula, or pseudo-code (or empty string if non-technical)",
+  "commonMisconceptions": ["Common mistake 1 students make", "Common mistake 2"],
+  "summary": "Concise key takeaway sentence",
+  "disclaimer": "AI-generated educational explanation. Please verify critical facts and exam-specific details with primary textbooks and verified course materials."
 }`;
 
     const response = await client.models.generateContent({
       model: 'gemini-3.8-flash',
       contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+      config: { responseMimeType: 'application/json' },
     });
 
     const parsed = JSON.parse(response.text || '{}');
     res.json(parsed);
   } catch (err: any) {
-    console.warn('Gemini API call failed, providing intelligent academic fallback:', err?.message || err);
-    const { noteTitle, subject, style = 'exam_cheatsheet' } = req.body;
+    console.warn('Explain endpoint fallback triggered:', err?.message || err);
+    const { topic = 'Core Topic', difficulty = 'Intermediate', style = 'Analogy-Rich' } = req.body;
     res.json({
-      summary: `### High-Yield Exam Summary: ${noteTitle || 'Engineering Module'} (${subject || 'Core Engineering'})\n\n` +
-        `**Core Theoretical Concept & Invariants:**\n` +
-        `This unit analyzes foundational engineering principles, asymptotic boundaries, and architectural trade-offs essential for university semester examinations and GATE technical interviews.\n\n` +
-        `**Key Equations & Bounds:**\n` +
-        `- Time Complexity: Best Case O(1), Average Case O(n log n), Worst Case O(n²).\n` +
-        `- Space Optimization: State compression reduces auxiliary memory overhead.\n` +
-        `- Invariant Verification: Pre-conditions and post-conditions must hold across recursive calls.\n\n` +
-        `**Semester Exam High-Yield Advice:**\n` +
-        `Always provide step-by-step state transition diagrams, pseudocode, and state termination conditions to guarantee full marks in 10-mark questions.`,
-      keyFormulas: [
-        'Master Theorem: T(n) = aT(n/b) + f(n)',
-        'Amortized Complexity: O(1) across N dynamic table doubling operations',
-        'Amdahl\'s Law Speedup: S = 1 / ((1 - p) + p/k)'
+      topic,
+      difficulty,
+      style,
+      title: `Understanding ${topic}`,
+      introduction: `${topic} is a fundamental concept that empowers learners to reason systematically and solve real-world problems.`,
+      analogy: `Imagine ${topic} as a precision GPS navigation system: it continuously calculates the optimal route while adapting dynamically to obstacles.`,
+      coreMechanics: [
+        'Fundamental Invariants: The underlying rules governing input/output transformations.',
+        'Efficiency Bottlenecks: Identifying where most time and computational resources are spent.',
+        'Edge Case Handling: Verifying safety constraints under boundary conditions.'
       ],
-      bulletPoints: [
-        'Ensure base cases are checked before recursive branching.',
-        'Beware of null pointer references and off-by-one edge boundaries.',
-        'Trace dry-run states systematically with tabular matrix layout.'
+      codeOrFormula: `// Demonstrating ${topic}\nconst compute = (data) => {\n  return processPipeline(data);\n};`,
+      commonMisconceptions: [
+        'Overlooking initial boundary conditions.',
+        'Assuming worst-case performance represents typical everyday operations.'
       ],
-      commonExamMistakes: [
-        'Confusing average-case with worst-case bounds under adversarial inputs',
-        'Omitting state restoration in recursive backtracking functions'
-      ],
-      mode: style,
-      fallback: true
+      summary: `In summary, understanding ${topic} provides the building blocks for deeper mastery in the field.`,
+      disclaimer: 'AI-generated educational explanation. Please verify critical facts and exam-specific details with primary textbooks and verified course materials.'
     });
   }
 });
 
-// 2. API: Generate Quiz from Notes or Topic
-app.post('/api/ai/quiz', async (req: Request, res: Response) => {
+// 2. API: AI Tutor Follow-up Chat
+app.post('/api/ai/chat', async (req: Request, res: Response) => {
   try {
-    const { subject, topic, content, difficulty = 'medium', questionCount = 5 } = req.body;
+    const { topic, messages = [], userMessage } = req.body;
     const client = getAIClient();
 
     if (!client) {
-      // Dynamic university fallback
       res.json({
-        questions: [
-          {
-            id: 'q1',
-            question: `In ${subject || 'Data Structures & Algorithms'}, what is the worst-case time complexity of QuickSort when the pivot is chosen as the first element on an already sorted array?`,
-            options: ['O(n log n)', 'O(n²)', 'O(n)', 'O(log n)'],
-            correctIndex: 1,
-            explanation: 'When the array is already sorted and the first element is selected as pivot, the partitioning yields skewed subproblems of size 0 and n-1, producing T(n) = T(n-1) + O(n) which sums to O(n²).',
-            topicTag: topic || 'Sorting Algorithms',
-            difficulty: 'medium'
-          },
-          {
-            id: 'q2',
-            question: 'Which CPU scheduling algorithm is non-preemptive and can lead to the convoy effect?',
-            options: ['Round Robin (RR)', 'Shortest Remaining Time First (SRTF)', 'First-Come, First-Served (FCFS)', 'Multi-level Feedback Queue'],
-            correctIndex: 2,
-            explanation: 'FCFS is non-preemptive. If a CPU-bound process arrives first, all subsequent short I/O bound processes queue up behind it, causing severe device under-utilization known as the convoy effect.',
-            topicTag: 'Operating Systems',
-            difficulty: 'easy'
-          },
-          {
-            id: 'q3',
-            question: 'In relational database design, which Normal Form requires eliminating partial dependencies on a composite candidate key?',
-            options: ['1NF', '2NF', '3NF', 'BCNF'],
-            correctIndex: 1,
-            explanation: 'Second Normal Form (2NF) enforces 1NF and guarantees that every non-prime attribute is fully functionally dependent on the entire candidate key, eliminating partial dependencies.',
-            topicTag: 'DBMS',
-            difficulty: 'medium'
-          },
-          {
-            id: 'q4',
-            question: 'In TCP congestion control, what happens immediately after a triple duplicate ACK is received in TCP Reno?',
-            options: ['cwnd is set to 1 MSS and slow start restarts', 'Fast Retransmit & Fast Recovery are triggered; cwnd is halved', 'Connection is terminated immediately', 'Window size increases exponentially without limits'],
-            correctIndex: 1,
-            explanation: 'TCP Reno treats triple duplicate ACKs as mild congestion (packet loss but network still delivering later packets), triggering Fast Retransmit and Fast Recovery where ssthresh = cwnd / 2, avoiding Slow Start drop to 1 MSS.',
-            topicTag: 'Computer Networks',
-            difficulty: 'gate_exam_hard'
-          },
-          {
-            id: 'q5',
-            question: 'What is the primary difference between a Semaphore and a Mutex in concurrent programming?',
-            options: ['Mutex is faster, semaphore is slower', 'Mutex has ownership (only the locking thread can unlock it), whereas a Semaphore can be signaled by any thread', 'Semaphore can only count to 1', 'Mutex is implemented strictly in hardware'],
-            correctIndex: 1,
-            explanation: 'A Mutex is a locking mechanism with thread ownership semantics: only the acquiring thread may release it. A Semaphore is a signaling mechanism without ownership semantics.',
-            topicTag: 'Concurrency & OS',
-            difficulty: 'medium'
-          }
-        ]
+        reply: `Great question regarding **${topic || 'this concept'}**! In practice, this connects directly to how inputs are partitioned and processed. A helpful way to verify your understanding is to trace a minimal edge case step-by-step. Would you like to see a concrete example or test this with a quiz question?`,
+        disclaimer: 'AI-generated tutor reply. Verify critical answers against certified references.'
       });
       return;
     }
 
-    const prompt = `You are a university exam creator for B.Tech Computer Science and Engineering students (GATE/University standard).
-Create ${questionCount} multiple-choice quiz questions based on:
-Subject: "${subject || 'Computer Science'}"
-Topic: "${topic || 'General Concepts'}"
-Difficulty: "${difficulty}" (Options: easy, medium, gate_exam_hard)
-Context / Notes excerpt:
-${content ? content.slice(0, 3000) : 'Standard engineering syllabus concepts'}
+    const conversationHistory = messages.map((m: any) => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${m.text}`).join('\n');
+    const prompt = `You are AI Study Buddy's personalized tutor.
+Topic being studied: "${topic}".
+Conversation so far:
+${conversationHistory}
+Student asks: "${userMessage}"
 
-Return strictly JSON format:
+Provide a clear, supportive, instructive, and academically precise answer. Keep it within 3 short paragraphs. Include a code or formula example if relevant.`;
+
+    const response = await client.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: prompt,
+    });
+
+    res.json({
+      reply: response.text || 'I could not generate a response. Please try rephrasing your question.',
+      disclaimer: 'AI-generated tutor reply. Verify critical answers against certified references.'
+    });
+  } catch (err: any) {
+    console.warn('Chat endpoint fallback:', err?.message || err);
+    res.json({
+      reply: `That is an insightful question. When analyzing this aspect, focus on the distinction between the theoretical definition and practical execution boundaries. Reviewing the core formulas will help solidify the concept.`,
+      disclaimer: 'AI-generated tutor reply. Verify critical answers against certified references.'
+    });
+  }
+});
+
+// 3. API: Quiz Generator (MCQs, True/False, Short Answer)
+app.post('/api/ai/quiz', async (req: Request, res: Response) => {
+  try {
+    const { topic, difficulty = 'Intermediate', questionCount = 5, questionTypes = ['mcq', 'tf', 'short'] } = req.body;
+    const client = getAIClient();
+
+    if (!client) {
+      res.json({
+        topic,
+        difficulty,
+        questions: [
+          {
+            id: 'q-1',
+            type: 'mcq',
+            question: `In the context of ${topic || 'Modern Computing'}, which of the following is the primary advantage of active recall over passive reading?`,
+            options: [
+              'It requires less cognitive effort',
+              'It strengthens neural retrieval pathways and long-term retention',
+              'It eliminates the need for understanding core concepts',
+              'It guarantees zero exam anxiety'
+            ],
+            correctIndex: 1,
+            explanation: 'Active recall forces the brain to retrieve information from memory, which scientifically cements synaptic connections far more effectively than passive rereading.',
+            points: 10
+          },
+          {
+            id: 'q-2',
+            type: 'tf',
+            question: 'True or False: Few-shot prompting provides an LLM with several concrete input-output examples before asking for the target completion.',
+            options: ['True', 'False'],
+            correctIndex: 0,
+            explanation: 'True. Few-shot prompting guides the model by demonstrating the desired format, reasoning pattern, and output structure through 2 to 5 demonstrations.',
+            points: 10
+          },
+          {
+            id: 'q-3',
+            type: 'mcq',
+            question: 'What is the root cause of an "AI Hallucination" in Large Language Models?',
+            options: [
+              'The model intentionally produces false statements to deceive users',
+              'Hardware overheating in the data center',
+              'Probabilistic token generation without ground-truth factual verification or real-world grounding',
+              'The user typing their prompt too quickly'
+            ],
+            correctIndex: 2,
+            explanation: 'LLMs predict the most statistically probable next tokens based on training patterns rather than consulting a deterministic factual database, leading to plausible-sounding yet fabricated information.',
+            points: 10
+          },
+          {
+            id: 'q-4',
+            type: 'short',
+            question: `Briefly state the difference between zero-shot and few-shot learning for ${topic || 'AI models'}.`,
+            sampleAnswer: 'Zero-shot learning tasks the model with direct instructions without examples, whereas few-shot learning includes exemplar pairs to establish context and structure.',
+            keyTerms: ['zero-shot', 'few-shot', 'examples', 'prompt'],
+            points: 10
+          }
+        ],
+        disclaimer: 'AI-generated quiz questions. Always check critical grading criteria against your syllabus.'
+      });
+      return;
+    }
+
+    const prompt = `You are a university exam creator for "AI Study Buddy".
+Generate an interactive quiz on the topic "${topic}".
+Difficulty: ${difficulty}
+Total Questions: ${questionCount}
+Include these question types: ${JSON.stringify(questionTypes)}
+
+Return strictly valid JSON in this structure:
 {
+  "topic": "${topic}",
+  "difficulty": "${difficulty}",
   "questions": [
     {
-      "id": "q1",
-      "question": "Question text (can include code snippets or mathematical expressions)",
-      "options": ["Option A", "Option B", "Option C", "Option D"],
-      "correctIndex": 0,
-      "explanation": "Clear, instructive conceptual reasoning why this option is correct and others are not.",
-      "topicTag": "Specific subtopic tag",
-      "difficulty": "${difficulty}"
+      "id": "q-1",
+      "type": "mcq", // or "tf" or "short"
+      "question": "Question prompt",
+      "options": ["Option A", "Option B", "Option C", "Option D"], // For MCQ or ["True", "False"] for TF
+      "correctIndex": 0, // 0-indexed for MCQ/TF
+      "explanation": "Clear explanation of why this answer is correct",
+      "points": 10
+    },
+    {
+      "id": "q-2",
+      "type": "short",
+      "question": "Conceptual short question",
+      "sampleAnswer": "Model ideal answer",
+      "keyTerms": ["key term 1", "key term 2"],
+      "points": 10
     }
-  ]
+  ],
+  "disclaimer": "AI-generated quiz questions. Always check critical grading criteria against your syllabus."
 }`;
 
     const response = await client.models.generateContent({
       model: 'gemini-3.8-flash',
       contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+      config: { responseMimeType: 'application/json' },
     });
 
     const parsed = JSON.parse(response.text || '{"questions":[]}');
     res.json(parsed);
   } catch (err: any) {
-    console.warn('Gemini quiz failed, providing fallback quiz questions:', err?.message || err);
-    const { subject, topic, difficulty = 'medium' } = req.body;
+    console.warn('Quiz generator fallback triggered:', err?.message || err);
+    const { topic = 'Educational Concept', difficulty = 'Intermediate' } = req.body;
     res.json({
+      topic,
+      difficulty,
       questions: [
         {
-          id: 'q1',
-          question: `In ${subject || 'Engineering'}, what is the worst-case time complexity of QuickSort with first-element pivot on already sorted data?`,
-          options: ['O(n log n)', 'O(n²)', 'O(n)', 'O(log n)'],
-          correctIndex: 1,
-          explanation: 'When the array is already sorted and the first element is selected as pivot, partitioning yields skewed subproblems of size 0 and n-1, producing T(n) = T(n-1) + O(n) which sums to O(n²).',
-          topicTag: topic || 'Algorithms',
-          difficulty: 'medium'
+          id: 'q-fallback-1',
+          type: 'mcq',
+          question: `Which fundamental principle characterizes ${topic}?`,
+          options: [
+            'Systematic abstraction and structured constraints',
+            'Random execution without verification',
+            'Complete elimination of latency',
+            'Unbounded memory consumption'
+          ],
+          correctIndex: 0,
+          explanation: `${topic} relies upon disciplined abstraction to manage complexity and provide reliable guarantees.`,
+          points: 10
         },
         {
-          id: 'q2',
-          question: 'Which CPU scheduling algorithm is non-preemptive and can lead to the convoy effect?',
-          options: ['Round Robin (RR)', 'Shortest Remaining Time First (SRTF)', 'First-Come, First-Served (FCFS)', 'Multi-level Feedback Queue'],
-          correctIndex: 2,
-          explanation: 'FCFS is non-preemptive. If a CPU-bound process arrives first, all subsequent short I/O bound processes queue up behind it, causing severe device under-utilization known as the convoy effect.',
-          topicTag: 'Operating Systems',
-          difficulty: 'easy'
-        },
-        {
-          id: 'q3',
-          question: 'In relational database design, which Normal Form requires eliminating partial dependencies on a composite candidate key?',
-          options: ['1NF', '2NF', '3NF', 'BCNF'],
-          correctIndex: 1,
-          explanation: 'Second Normal Form (2NF) enforces 1NF and guarantees that every non-prime attribute is fully functionally dependent on the entire candidate key, eliminating partial dependencies.',
-          topicTag: 'DBMS',
-          difficulty: 'medium'
-        },
-        {
-          id: 'q4',
-          question: 'In TCP congestion control, what happens immediately after a triple duplicate ACK is received in TCP Reno?',
-          options: ['cwnd is set to 1 MSS and slow start restarts', 'Fast Retransmit & Fast Recovery are triggered; cwnd is halved', 'Connection is terminated immediately', 'Window size increases exponentially without limits'],
-          correctIndex: 1,
-          explanation: 'TCP Reno treats triple duplicate ACKs as mild congestion, triggering Fast Retransmit and Fast Recovery where ssthresh = cwnd / 2, avoiding Slow Start drop to 1 MSS.',
-          topicTag: 'Computer Networks',
-          difficulty: 'gate_exam_hard'
-        },
-        {
-          id: 'q5',
-          question: 'What is the primary difference between a Semaphore and a Mutex in concurrent programming?',
-          options: ['Mutex is faster, semaphore is slower', 'Mutex has ownership (only acquiring thread can unlock), whereas Semaphore can be signaled by any thread', 'Semaphore can only count to 1', 'Mutex is implemented strictly in hardware'],
-          correctIndex: 1,
-          explanation: 'A Mutex is a locking mechanism with thread ownership semantics. A Semaphore is a signaling mechanism without ownership semantics.',
-          topicTag: 'Concurrency & OS',
-          difficulty: 'medium'
+          id: 'q-fallback-2',
+          type: 'tf',
+          question: `True or False: Pre-conditions and post-conditions must always be defined when formalizing ${topic}.`,
+          options: ['True', 'False'],
+          correctIndex: 0,
+          explanation: 'True. Invariants and conditions ensure correctness across all valid states.',
+          points: 10
         }
-      ]
+      ],
+      disclaimer: 'AI-generated quiz questions. Always check critical grading criteria against your syllabus.'
     });
   }
 });
 
-// 3. API: Generate Flashcards for Difficult Topics
-app.post('/api/ai/flashcards', async (req: Request, res: Response) => {
+// 4. API: Revision Notes Generator
+app.post('/api/ai/notes', async (req: Request, res: Response) => {
   try {
-    const { subject, topic, content, count = 6 } = req.body;
+    const { topic, detailLevel = 'Comprehensive', subject = 'General' } = req.body;
     const client = getAIClient();
 
     if (!client) {
       res.json({
-        flashcards: [
+        title: `Comprehensive Revision Guide: ${topic || 'Key Concepts'}`,
+        subject: subject || 'Computer Science & AI',
+        detailLevel,
+        overview: `This structured revision guide summarizes ${topic}. It is optimized for quick review before exams and technical interviews.`,
+        sections: [
           {
-            id: 'fc1',
-            front: 'What is the Space-Time Tradeoff in Dynamic Programming (e.g., Memoization vs Tabulation)?',
-            back: 'Memoization (Top-down) caches recursive calls using call-stack space O(N) + table space. Tabulation (Bottom-up) iteratively fills an array, frequently allowing space optimization from O(N) to O(1) by keeping only recent states.',
-            hint: 'Think recursion overhead vs iterative array traversal',
-            tag: subject || 'DSA'
+            heading: '1. Foundational Definition & Scope',
+            content: `${topic} establishes the contract between computational requirements and output guarantees. It structures complex operations into deterministic, verifiable steps.`
           },
           {
-            id: 'fc2',
-            front: 'What are the 4 Coffman conditions required for Deadlock to occur?',
-            back: '1. Mutual Exclusion\n2. Hold and Wait\n3. No Preemption\n4. Circular Wait.\nBreaking any ONE condition prevents deadlock.',
-            hint: 'M-H-N-C',
-            tag: 'Operating Systems'
+            heading: '2. Core Principles & Architecture',
+            content: '• Invariant Guarantee: System states transition strictly through authorized protocols.\n• Resource Allocation: Time complexity and memory footprints are balanced.\n• Modularity: Independent units communicate via explicit interfaces.'
           },
           {
-            id: 'fc3',
-            front: 'Explain ACID Properties in DBMS with 1-line definitions',
-            back: '• Atomicity: All or nothing execution.\n• Consistency: Database moves from one valid state to another.\n• Isolation: Concurrent transactions do not interfere.\n• Durability: Committed changes survive system crashes.',
-            hint: 'Transaction integrity guarantees',
-            tag: 'DBMS'
-          },
-          {
-            id: 'fc4',
-            front: 'Differentiate between TCP and UDP at the Transport Layer',
-            back: 'TCP is connection-oriented, reliable, guarantees ordered delivery, has congestion/flow control, with 20-byte min header.\nUDP is connectionless, unreliable best-effort, lightweight (8-byte header), ideal for real-time video/gaming/DNS.',
-            hint: 'Reliability vs Speed/Overhead',
-            tag: 'Computer Networks'
-          },
-          {
-            id: 'fc5',
-            front: 'What is P vs NP problem in Computational Complexity?',
-            back: 'P: Problems solvable in polynomial time O(n^k).\nNP: Problems whose solutions can be verified in polynomial time.\nP = NP asks whether verification capability implies fast solvability.',
-            hint: 'Solvability vs Verifiability',
-            tag: 'Theory of Computation'
-          },
-          {
-            id: 'fc6',
-            front: 'What is the purpose of Virtual Memory and Page Tables?',
-            back: 'Virtual Memory provides each process an illusion of contiguous physical memory and isolation. The Page Table translates Virtual Page Numbers (VPN) to Physical Frame Numbers (PFN), assisted by the TLB hardware cache.',
-            hint: 'Translation Lookaside Buffer & address isolation',
-            tag: 'Computer Architecture / OS'
+            heading: '3. Real-World Applications & Industry Impact',
+            content: `From cloud infrastructure to embedded systems, ${topic} forms the backbone of scalable real-world implementations.`
           }
-        ]
+        ],
+        keyDefinitions: [
+          { term: 'Invariant', definition: 'A condition that remains true across all program states or transformations.' },
+          { term: 'Asymptotic Bound', definition: 'The mathematical upper or average limit on resource consumption as input size grows.' },
+          { term: 'Convergence', definition: 'The guarantee that an algorithm terminates at an optimal or acceptable solution.' }
+        ],
+        formulasAndTheorems: [
+          'Master Theorem: T(n) = aT(n/b) + f(n)',
+          'Bayes Theorem: P(A|B) = [P(B|A) * P(A)] / P(B)'
+        ],
+        examQuickTips: [
+          'Always identify the base cases before beginning recursive derivations.',
+          'State pre-conditions and post-conditions clearly in 10-mark questions.',
+          'Draw state-space diagrams to demonstrate practical understanding.'
+        ],
+        summary: `In summary, ${topic} combines theoretical rigor with practical problem-solving. Reviewing these definitions and invariants ensures high performance on examinations.`,
+        disclaimer: 'AI-generated study notes. Important formulas, dates, and historical definitions should be verified against official course syllabi.'
       });
       return;
     }
 
-    const prompt = `You are an expert engineering tutor creating active-recall flashcards for a B.Tech student studying "${subject || 'Engineering'}" - "${topic || 'Core Subject'}".
-Generate ${count} high-yield, conceptually challenging flashcards.
-Focus on hard concepts, definitions, derivations, architectural distinctions, and exam favorites.
+    const prompt = `You are an expert academic curriculum specialist for "AI Study Buddy".
+Generate high-yield, structured revision notes for "${topic}".
+Subject: "${subject}"
+Detail Level: "${detailLevel}"
 
-Context/Notes:
-${content ? content.slice(0, 3000) : 'Standard engineering syllabus topics'}
-
-Return strictly JSON:
+Format STRICTLY as valid JSON matching this schema:
 {
-  "flashcards": [
+  "title": "Comprehensive Revision Guide: ${topic}",
+  "subject": "${subject}",
+  "detailLevel": "${detailLevel}",
+  "overview": "Clear 2-3 sentence overview of this topic",
+  "sections": [
     {
-      "id": "fc1",
-      "front": "Challenging question or core concept trigger",
-      "back": "Clear, concise, high-retention explanation with bullet points or formula",
-      "hint": "Helpful mnemonic or memory trigger",
-      "tag": "${subject || 'Engineering'}"
+      "heading": "Section Heading",
+      "content": "Rich markdown text with bullet points, explanation, and code/formulas if applicable"
     }
-  ]
+  ],
+  "keyDefinitions": [
+    { "term": "Term Name", "definition": "Clear concise definition" }
+  ],
+  "formulasAndTheorems": ["Equation / Theorem 1", "Equation / Theorem 2"],
+  "examQuickTips": ["Exam tip 1", "Common trap to avoid"],
+  "summary": "Final synthesis paragraph",
+  "disclaimer": "AI-generated study notes. Important formulas, dates, and historical definitions should be verified against official course syllabi."
 }`;
 
     const response = await client.models.generateContent({
       model: 'gemini-3.8-flash',
       contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+      config: { responseMimeType: 'application/json' },
+    });
+
+    const parsed = JSON.parse(response.text || '{}');
+    res.json(parsed);
+  } catch (err: any) {
+    console.warn('Notes generator fallback triggered:', err?.message || err);
+    const { topic = 'Academic Concept' } = req.body;
+    res.json({
+      title: `Revision Notes: ${topic}`,
+      subject: 'Computer Science & AI',
+      overview: `A complete revision breakdown covering essential concepts of ${topic}.`,
+      sections: [
+        {
+          heading: '1. Theoretical Framework',
+          content: `${topic} is formulated to address core challenges in modern computing and academic disciplines.`
+        },
+        {
+          heading: '2. Implementation Patterns',
+          content: 'Key steps include initialization, iterative transformation, validation, and terminal evaluation.'
+        }
+      ],
+      keyDefinitions: [
+        { term: 'Core Invariant', definition: 'The unchanging state property maintained throughout execution.' }
+      ],
+      formulasAndTheorems: ['Primary recurrence: T(n) = O(n log n)'],
+      examQuickTips: ['Draw a clear flowchart or architectural diagram for full marks.'],
+      summary: `Mastery of ${topic} is achieved through continuous active recall and problem practice.`,
+      disclaimer: 'AI-generated study notes. Important formulas, dates, and historical definitions should be verified against official course syllabi.'
+    });
+  }
+});
+
+// 5. API: Flashcards Generator
+app.post('/api/ai/flashcards', async (req: Request, res: Response) => {
+  try {
+    const { topic, count = 6, difficulty = 'Intermediate' } = req.body;
+    const client = getAIClient();
+
+    if (!client) {
+      res.json({
+        topic,
+        flashcards: [
+          {
+            id: 'fc-1',
+            question: `What is the core definition of ${topic || 'this concept'}?`,
+            answer: `It is a structured method or model that optimizes resource utilization and enforces foundational computational invariants.`,
+            hint: 'Think about primary purpose and guarantees',
+            tag: 'Definition'
+          },
+          {
+            id: 'fc-2',
+            question: 'What is the key difference between Zero-Shot and Few-Shot Prompting?',
+            answer: 'Zero-shot gives instructions with zero task-specific examples. Few-shot includes 2-5 demonstration pairs to teach the model format and style.',
+            hint: 'Count the demonstration examples',
+            tag: 'AI Concepts'
+          },
+          {
+            id: 'fc-3',
+            question: 'What is an AI Hallucination and why does it happen?',
+            answer: 'An AI Hallucination is when an LLM produces confident yet factually incorrect statements, caused by statistical token prediction without factual grounding.',
+            hint: 'Statistical probability vs verified truth',
+            tag: 'LLMs'
+          },
+          {
+            id: 'fc-4',
+            question: `What is the standard time-space tradeoff in ${topic || 'algorithmic optimization'}?`,
+            answer: 'Trading auxiliary memory (e.g., memoization tables or hash indexes) to dramatically reduce execution time from exponential to polynomial.',
+            hint: 'Memory footprint vs execution speed',
+            tag: 'Tradeoffs'
+          },
+          {
+            id: 'fc-5',
+            question: 'What is Chain-of-Thought (CoT) Prompting?',
+            answer: 'Prompting the model to write out intermediate reasoning steps before providing the final answer, significantly improving complex reasoning accuracy.',
+            hint: '"Think step-by-step"',
+            tag: 'Prompting'
+          }
+        ],
+        disclaimer: 'AI-generated active recall flashcards. Verify critical terms with trusted references.'
+      });
+      return;
+    }
+
+    const prompt = `You are an active-recall flashcard creator for "AI Study Buddy".
+Generate ${count} high-retention flashcards for "${topic}".
+Difficulty: "${difficulty}".
+Include questions on definitions, core mechanics, tradeoffs, and critical distinctions.
+
+Return strictly valid JSON:
+{
+  "topic": "${topic}",
+  "flashcards": [
+    {
+      "id": "fc-1",
+      "question": "Clear, challenging question testing active recall",
+      "answer": "Concise, precise answer with bullet points if helpful",
+      "hint": "Helpful memory hook or mnemonic",
+      "tag": "Category Tag"
+    }
+  ],
+  "disclaimer": "AI-generated active recall flashcards. Verify critical terms with trusted references."
+}`;
+
+    const response = await client.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: prompt,
+      config: { responseMimeType: 'application/json' },
     });
 
     const parsed = JSON.parse(response.text || '{"flashcards":[]}');
     res.json(parsed);
   } catch (err: any) {
-    console.warn('Gemini flashcards failed, providing curriculum fallback:', err?.message || err);
-    const { subject } = req.body;
+    console.warn('Flashcard generator fallback triggered:', err?.message || err);
     res.json({
+      topic: req.body.topic || 'Concept',
       flashcards: [
         {
-          id: 'fc1',
-          front: 'What is the Space-Time Tradeoff in Dynamic Programming (Memoization vs Tabulation)?',
-          back: 'Memoization (Top-down) caches recursive calls using call-stack space O(N) + table space. Tabulation (Bottom-up) iteratively fills an array, frequently allowing space optimization from O(N) to O(1) by keeping only recent states.',
-          hint: 'Think recursion overhead vs iterative array traversal',
-          tag: subject || 'DSA'
-        },
-        {
-          id: 'fc2',
-          front: 'What are the 4 Coffman conditions required for Deadlock to occur?',
-          back: '1. Mutual Exclusion\n2. Hold and Wait\n3. No Preemption\n4. Circular Wait.\nBreaking any ONE condition prevents deadlock.',
-          hint: 'M-H-N-C',
-          tag: 'Operating Systems'
-        },
-        {
-          id: 'fc3',
-          front: 'Explain ACID Properties in DBMS with 1-line definitions',
-          back: '• Atomicity: All or nothing execution.\n• Consistency: Database moves from one valid state to another.\n• Isolation: Concurrent transactions do not interfere.\n• Durability: Committed changes survive system crashes.',
-          hint: 'Transaction integrity guarantees',
-          tag: 'DBMS'
-        },
-        {
-          id: 'fc4',
-          front: 'Differentiate between TCP and UDP at the Transport Layer',
-          back: 'TCP is connection-oriented, reliable, guarantees ordered delivery, has congestion/flow control, with 20-byte min header.\nUDP is connectionless, unreliable best-effort, lightweight (8-byte header), ideal for real-time video/gaming/DNS.',
-          hint: 'Reliability vs Speed/Overhead',
-          tag: 'Computer Networks'
-        },
-        {
-          id: 'fc5',
-          front: 'What is P vs NP problem in Computational Complexity?',
-          back: 'P: Problems solvable in polynomial time O(n^k).\nNP: Problems whose solutions can be verified in polynomial time.\nP = NP asks whether verification capability implies fast solvability.',
-          hint: 'Solvability vs Verifiability',
-          tag: 'Theory of Computation'
+          id: 'fc-f-1',
+          question: `State the fundamental theorem of ${req.body.topic || 'this subject'}.`,
+          answer: 'It defines the mathematical upper bound and guarantees optimal convergence under boundary conditions.',
+          hint: 'Remember boundary conditions',
+          tag: 'Core'
         }
-      ]
+      ],
+      disclaimer: 'AI-generated active recall flashcards. Verify critical terms with trusted references.'
     });
   }
 });
 
-// 4. API: Curate Resources for Understanding Difficult Topics
-app.post('/api/ai/resources', async (req: Request, res: Response) => {
+// 6. API: Core AI Topic Interactive Playground (Prompting, Zero-shot, Few-shot, Hallucination tester)
+app.post('/api/ai/ai-concept-test', async (req: Request, res: Response) => {
   try {
-    const { subject, topic } = req.body;
+    const { conceptType, userPrompt, taskInput } = req.body;
     const client = getAIClient();
 
     if (!client) {
-      res.json({
-        resources: [
-          {
-            title: `NPTEL: Advanced ${subject || 'Engineering'} Lecture Series`,
-            provider: 'IIT Kharagpur / Madras (NPTEL)',
-            type: 'video_course',
-            url: 'https://nptel.ac.in/courses',
-            description: 'Comprehensive, rigorous university lecture series covering foundational theory, derivations, and exam problem solving.',
-            rating: 4.9,
-            estimatedHours: '30h series'
-          },
-          {
-            title: `GeeksforGeeks Curated Guide: ${topic || subject || 'Data Structures'}`,
-            provider: 'GeeksforGeeks',
-            type: 'article_and_code',
-            url: 'https://www.geeksforgeeks.org',
-            description: 'Standard B.Tech interview & semester notes with runnable C++/Java/Python implementations and time-complexity breakdowns.',
-            rating: 4.8,
-            estimatedHours: '4h deep dive'
-          },
-          {
-            title: 'Visualizing Algorithms & Systems Interactively',
-            provider: 'VisuAlgo & OpenDSA',
-            type: 'interactive_tool',
-            url: 'https://visualgo.net',
-            description: 'Step-by-step interactive animations to intuitively visualize data flow, pointer manipulation, and recursive call stacks.',
-            rating: 4.95,
-            estimatedHours: '1.5h sandbox'
-          },
-          {
-            title: 'MIT OpenCourseWare (6.006 / 6.033)',
-            provider: 'MIT OCW',
-            type: 'academic_notes',
-            url: 'https://ocw.mit.edu',
-            description: 'World-class lecture notes, recitation guides, and problem sets with solutions for deep mastery.',
-            rating: 5.0,
-            estimatedHours: 'Weekly modules'
-          },
-          {
-            title: 'GATE Overflow Community Solutions & PYQs',
-            provider: 'GATE Overflow',
-            type: 'practice_questions',
-            url: 'https://gateoverflow.in',
-            description: 'Peer-reviewed solutions to previous 25 years of engineering entrance and university exams with detailed discussions.',
-            rating: 4.85,
-            estimatedHours: 'Self-paced practice'
-          }
-        ]
-      });
+      if (conceptType === 'zero-shot') {
+        res.json({
+          technique: 'Zero-Shot Prompting',
+          output: `Direct completion for "${taskInput}":\nSentiment: Positive (Confidence: 0.94).\nExplanation: The model evaluated the semantic tokens without any prior examples.`,
+          analysis: 'Zero-shot relies solely on the pre-trained weights without intermediate priming.'
+        });
+      } else if (conceptType === 'few-shot') {
+        res.json({
+          technique: 'Few-Shot Prompting',
+          output: `Few-shot guided completion:\nInput: "${taskInput}"\nClassification: High-Priority Inquiry\nAction: Immediate Escalation to Engineering.`,
+          analysis: 'By demonstrating 2 pattern examples, the model adhered strictly to the output schema.'
+        });
+      } else {
+        res.json({
+          technique: 'Hallucination Inspection',
+          output: `Analysis: The prompt asks about an imaginary theorem. An ungrounded model might fabricate plausible-sounding citations. A grounded model warns that no such theorem exists.`,
+          analysis: 'Mitigate hallucinations using ground-truth retrieval (RAG) and low temperature settings.'
+        });
+      }
       return;
     }
 
-    const prompt = `You are a B.Tech academic advisor. Recommend 5-6 top-tier study resources (NPTEL, MIT OCW, GeeksforGeeks, interactive visualization tools, open-source repositories, textbooks, and YouTube educators) for:
-Subject: "${subject || 'Computer Science'}"
-Topic: "${topic || 'General Curriculum'}"
+    const prompt = `You are demonstrating the AI concept "${conceptType}" for educational purposes.
+Concept: ${conceptType} (Options: zero-shot, few-shot, prompting, hallucination, chain-of-thought)
+Student prompt or test case:
+"${userPrompt || taskInput}"
 
-Return strictly valid JSON:
-{
-  "resources": [
-    {
-      "title": "Resource title",
-      "provider": "e.g. NPTEL / MIT OCW / GeeksforGeeks / Coursera / Stanford",
-      "type": "video_course | article_and_code | interactive_tool | academic_notes | practice_questions",
-      "url": "Reputable official URL or educational portal",
-      "description": "Specific explanation of what the student will learn and how it clarifies difficult concepts",
-      "rating": 4.9,
-      "estimatedHours": "e.g. 2h read or 15h course"
-    }
-  ]
-}`;
-
-    const response = await client.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
-    });
-
-    const parsed = JSON.parse(response.text || '{"resources":[]}');
-    res.json(parsed);
-  } catch (err: any) {
-    console.error('Error in /api/ai/resources:', err);
-    res.status(500).json({ error: err.message || 'Failed to fetch resources' });
-  }
-});
-
-// 5. API: AI Personalized Study Schedule Generator
-app.post('/api/ai/schedule', async (req: Request, res: Response) => {
-  try {
-    const { subjects, examDates, dailyHours = 4, targetCGPA = 9.0 } = req.body;
-    const client = getAIClient();
-
-    if (!client) {
-      res.json({
-        planOverview: `Targeting a ${targetCGPA} CGPA with ${dailyHours} hours/day distributed across ${subjects?.length || 4} engineering modules with spaced revision blocks.`,
-        dailySchedule: [
-          {
-            timeBlock: '08:00 AM - 09:30 AM',
-            subject: 'Data Structures & Algorithms',
-            focusTopic: 'Graph Algorithms (Dijkstra & Prim\'s MST)',
-            sessionType: 'Active Problem Solving',
-            difficulty: 'High'
-          },
-          {
-            timeBlock: '10:00 AM - 11:30 AM',
-            subject: 'Operating Systems',
-            focusTopic: 'Memory Management & Virtual Page Replacement',
-            sessionType: 'Concept Deep Dive & Diagrams',
-            difficulty: 'Medium'
-          },
-          {
-            timeBlock: '04:00 PM - 05:00 PM',
-            subject: 'Database Management Systems',
-            focusTopic: 'SQL Complex Joins, Normalization (BCNF)',
-            sessionType: 'Practice Problems & Flashcards',
-            difficulty: 'Medium'
-          },
-          {
-            timeBlock: '08:30 PM - 09:15 PM',
-            subject: 'Computer Networks',
-            focusTopic: 'TCP 3-Way Handshake & Flow Control',
-            sessionType: 'Spaced Repetition & Daily Quiz',
-            difficulty: 'Low'
-          }
-        ],
-        weeklyMilestones: [
-          'Complete Unit 2 Lab Assignments & code validations',
-          'Solve 5 previous year question papers (PYQs) for Mid-Terms',
-          'Review 50 flashcards across high-difficulty tags'
-        ],
-        examPrepTips: [
-          'Use the 50/10 Pomodoro rhythm during heavy derivations',
-          'Summarize each lecture into a single-page formula sheet right after class',
-          'Simulate a timed mock test 3 days prior to your first semester exam'
-        ]
-      });
-      return;
-    }
-
-    const prompt = `You are a high-performance academic coach for engineering students.
-Generate a personalized, balanced study schedule based on the following student profile:
-- Enrolled Subjects & status: ${JSON.stringify(subjects || ['DSA', 'OS', 'DBMS', 'Computer Networks'])}
-- Upcoming Deadlines & Exam Dates: ${JSON.stringify(examDates || [])}
-- Target Daily Study Hours: ${dailyHours}
-- Target CGPA / Academic Goal: ${targetCGPA}
+Provide:
+1. The model output executing this technique
+2. A brief 2-sentence educational commentary explaining what happened behind the scenes and how this illustrates ${conceptType}.
 
 Return strictly JSON:
 {
-  "planOverview": "Strategic rationale for the schedule distribution",
-  "dailySchedule": [
-    {
-      "timeBlock": "e.g. 09:00 AM - 10:30 AM",
-      "subject": "Subject Name",
-      "focusTopic": "Specific high-priority topic",
-      "sessionType": "Active Problem Solving | Theory Revision | Flashcard Drill | Lab Practice",
-      "difficulty": "High | Medium | Low"
-    }
-  ],
-  "weeklyMilestones": ["Key milestone 1", "Key milestone 2", "Key milestone 3"],
-  "examPrepTips": ["Actionable study habits to avoid burnout and retain complex formulas"]
+  "technique": "${conceptType}",
+  "output": "The model completion",
+  "analysis": "Educational commentary on how this demonstrates the AI concept"
 }`;
 
     const response = await client.models.generateContent({
       model: 'gemini-3.8-flash',
       contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+      config: { responseMimeType: 'application/json' },
     });
 
     const parsed = JSON.parse(response.text || '{}');
     res.json(parsed);
   } catch (err: any) {
-    console.error('Error in /api/ai/schedule:', err);
-    res.status(500).json({ error: err.message || 'Failed to generate schedule' });
-  }
-});
-
-// 6. API: AI Concept Clarifier / Tutor
-app.post('/api/ai/explain', async (req: Request, res: Response) => {
-  try {
-    const { question, subject, context } = req.body;
-    const client = getAIClient();
-
-    if (!client) {
-      res.json({
-        explanation: `### Conceptual Breakdown: ${question}\n\n` +
-          `**1. Real-World Intuitive Analogy:**\n` +
-          `Imagine a bustling warehouse where packages arrive constantly. If one worker refuses to release a pallet jack while waiting for a forklift, the entire loading dock freezes.\n\n` +
-          `**2. Formal University Definition:**\n` +
-          `In ${subject || 'Engineering'}, this describes the strict mathematical and structural invariants governing state transitions and hardware-software contracts.\n\n` +
-          `**3. Semester Exam Must-Knows:**\n` +
-          `- Always define the preconditions and postconditions.\n` +
-          `- State the space & time complexity.\n` +
-          `- Give one concrete example with dry-run trace diagram.`,
-        keyTakeaway: 'Master the formal definition + 1 edge case diagram to secure full marks in 10-mark questions.'
-      });
-      return;
-    }
-
-    const prompt = `You are a supportive, genius B.Tech senior tutor.
-Explain the following student question/difficulty in simple yet academically rigorous terms for university exams:
-Question/Topic: "${question}"
-Subject: "${subject || 'Engineering'}"
-Extra Context: "${context || ''}"
-
-Return strictly JSON:
-{
-  "explanation": "Clear markdown explanation with intuition analogy, step-by-step breakdown, code snippet if applicable, and exam advice",
-  "keyTakeaway": "One punchy sentence that locks the concept in memory"
-}`;
-
-    const response = await client.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+    res.json({
+      technique: req.body.conceptType || 'AI Concept',
+      output: 'Educational demonstration output completed.',
+      analysis: 'This illustrates the sensitivity of token probability to prompt structure and contextual examples.'
     });
-
-    const parsed = JSON.parse(response.text || '{}');
-    res.json(parsed);
-  } catch (err: any) {
-    console.error('Error in /api/ai/explain:', err);
-    res.status(500).json({ error: err.message || 'Failed to explain concept' });
   }
 });
 
@@ -672,7 +586,7 @@ async function setupServer() {
   }
 
   app.listen(port, '0.0.0.0', () => {
-    console.log(`ScholarPulse B.Tech Study Assistant running on http://0.0.0.0:${port}`);
+    console.log(`AI Study Buddy server running on http://0.0.0.0:${port}`);
   });
 }
 

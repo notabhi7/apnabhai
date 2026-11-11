@@ -1,162 +1,173 @@
-export type ThemeMode = 'dark' | 'light' | 'midnight' | 'sepia';
-export type AccentColor = 'rose' | 'pink' | 'lavender' | 'peach' | 'coral' | 'indigo' | 'emerald';
+export type ThemeMode = 'light' | 'dark' | 'system';
 
-export interface Subject {
+export interface User {
   id: string;
   name: string;
-  code: string; // e.g. CS-201
-  semester: number;
-  color: string;
-  iconName: string;
-  professor: string;
-  credits: number;
-  syllabusProgress: number; // 0 - 100
-  targetGrade: string; // e.g. A+
-  description?: string;
+  email: string;
+  avatarUrl?: string;
+  role: 'student' | 'educator';
+  studyGoalHours: number;
+  joinedAt: string;
 }
 
-export interface LectureNote {
+export type PageView =
+  | 'landing'
+  | 'dashboard'
+  | 'ai-tutor'
+  | 'quiz-generator'
+  | 'revision-notes'
+  | 'flashcards'
+  | 'ai-concepts'
+  | 'study-library'
+  | 'profile-settings';
+
+// AI Tutor Types
+export type ExplanationDifficulty = 'Beginner' | 'Intermediate' | 'Advanced';
+export type ExplanationStyle = 'Analogy-Rich' | 'Technical & Formal' | 'Socratic & Conceptual' | 'Executive Summary';
+
+export interface ExplanationResult {
   id: string;
-  subjectId: string;
-  title: string;
   topic: string;
-  moduleNumber: number;
-  content: string;
-  summary?: string;
-  keyFormulas?: string[];
-  bulletPoints?: string[];
-  commonMistakes?: string[];
-  tags: string[];
-  date: string;
-  bookmarked: boolean;
-  difficulty: 'Easy' | 'Medium' | 'Hard';
-  codeSnippet?: {
-    language: string;
-    code: string;
-  };
-}
-
-export type DeadlineType = 'Assignment' | 'Lab Exam' | 'Mid-Term' | 'End-Term' | 'Project' | 'Quiz';
-export type DeadlinePriority = 'High' | 'Medium' | 'Low';
-export type DeadlineStatus = 'pending' | 'in_progress' | 'completed';
-
-export interface Deadline {
-  id: string;
+  difficulty: ExplanationDifficulty;
+  style: ExplanationStyle;
   title: string;
-  subjectId: string;
-  dueDate: string; // YYYY-MM-DD or ISO string
-  dueTime?: string;
-  type: DeadlineType;
-  priority: DeadlinePriority;
-  status: DeadlineStatus;
-  weightagePercentage: number;
-  notes?: string;
+  introduction: string;
+  analogy: string;
+  coreMechanics: string[];
+  codeOrFormula?: string;
+  commonMisconceptions: string[];
+  summary: string;
+  createdAt: string;
+  saved?: boolean;
+  disclaimer: string;
 }
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  timestamp: string;
+}
+
+// Quiz Types
+export type QuestionType = 'mcq' | 'tf' | 'short';
 
 export interface QuizQuestion {
   id: string;
+  type: QuestionType;
   question: string;
-  options: string[];
-  correctIndex: number;
+  options?: string[]; // For MCQ or True/False
+  correctIndex?: number;
+  sampleAnswer?: string; // For short answer
+  keyTerms?: string[];
   explanation: string;
-  topicTag: string;
-  difficulty: 'easy' | 'medium' | 'gate_exam_hard';
+  points: number;
+}
+
+export interface Quiz {
+  id: string;
+  topic: string;
+  difficulty: ExplanationDifficulty;
+  questions: QuizQuestion[];
+  createdAt: string;
+  saved?: boolean;
 }
 
 export interface QuizAttempt {
   id: string;
-  subjectId: string;
+  quizId: string;
   topic: string;
   score: number;
-  totalQuestions: number;
-  date: string;
-  timeSpentSeconds: number;
+  totalPoints: number;
+  percentage: number;
+  answers: Record<string, string | number>;
+  completedAt: string;
 }
 
+// Revision Notes Types
+export interface KeyDefinition {
+  term: string;
+  definition: string;
+}
+
+export interface NoteSection {
+  heading: string;
+  content: string;
+}
+
+export interface RevisionNote {
+  id: string;
+  title: string;
+  topic: string;
+  subject: string;
+  detailLevel: string;
+  overview: string;
+  sections: NoteSection[];
+  keyDefinitions: KeyDefinition[];
+  formulasAndTheorems?: string[];
+  examQuickTips?: string[];
+  summary: string;
+  createdAt: string;
+  lastEditedAt?: string;
+  saved?: boolean;
+  disclaimer: string;
+}
+
+// Flashcard Types
 export interface Flashcard {
   id: string;
-  subjectId: string;
-  topic: string;
-  front: string;
-  back: string;
+  question: string;
+  answer: string;
   hint?: string;
-  masteryLevel: 0 | 1 | 2; // 0 = learning, 1 = practicing, 2 = mastered
-  lastReviewed?: string;
   tag: string;
+  status: 'known' | 'learning' | 'unreviewed';
+  lastReviewedAt?: string;
 }
 
-export type ResourceType = 'video_course' | 'article_and_code' | 'interactive_tool' | 'academic_notes' | 'practice_questions';
-
-export interface CuratedResource {
+export interface FlashcardDeck {
   id: string;
-  subjectId: string;
   topic: string;
+  cards: Flashcard[];
+  createdAt: string;
+  saved?: boolean;
+}
+
+// Core AI Topics
+export interface AIConceptLesson {
+  id: string;
+  slug: 'prompting' | 'llms' | 'zero-shot' | 'few-shot' | 'hallucinations';
   title: string;
-  provider: string;
-  type: ResourceType;
-  url: string;
+  tagline: string;
   description: string;
-  rating: number;
-  estimatedHours: string;
-  bookmarked: boolean;
+  coreDefinition: string;
+  realWorldExample: string;
+  comparisonTable?: {
+    feature: string;
+    colA: string;
+    colB: string;
+  }[];
+  interactivePrompt: {
+    label: string;
+    initialPrompt: string;
+    taskInput: string;
+    sampleOutput: string;
+    explanation: string;
+  };
+  quizChallenge: {
+    question: string;
+    options: string[];
+    correctIndex: number;
+    explanation: string;
+  };
 }
 
-export interface StudyScheduleItem {
-  id: string;
-  day: string; // Monday, Tuesday, etc.
-  timeBlock: string;
-  subjectId: string;
-  focusTopic: string;
-  sessionType: string;
-  difficulty: 'High' | 'Medium' | 'Low';
-  completed: boolean;
-}
-
-export interface GroupMessage {
-  id: string;
-  groupId: string;
-  senderName: string;
-  senderAvatar: string;
-  senderRole: string; // e.g. Class Rep, Top Scorer, Peer
-  text: string;
-  timestamp: string;
-  noteSnippet?: string;
-  isMe?: boolean;
-}
-
-export interface StudyGroup {
-  id: string;
-  name: string;
-  subjectCode: string;
-  membersCount: number;
-  activeNow: number;
-  description: string;
-  tags: string[];
-  meetLink?: string;
-  messages: GroupMessage[];
-  sharedNotesCount: number;
-}
-
-export interface UserPreferences {
-  theme: ThemeMode;
-  accent: AccentColor;
-  dailyStudyTargetHours: number;
-  offlineMode: boolean;
-  pomodoroWorkMins: number;
-  pomodoroBreakMins: number;
-  soundEnabled: boolean;
-  syncDeviceId: string;
-  lastSyncedAt: string;
-}
-
-export interface AcademicGoal {
-  currentCGPA: number;
-  targetCGPA: number;
-  currentSemester: number;
-  totalSemesters: number;
-  totalCredits: number;
-  completedCredits: number;
+// Study Statistics
+export interface StudyStats {
+  topicsExplored: number;
+  quizzesCompleted: number;
+  avgQuizScore: number;
+  notesCreated: number;
+  flashcardsMastered: number;
   studyStreakDays: number;
-  totalStudyMinutes: number;
-  attendanceRate: number; // percentage
+  totalMinutesStudied: number;
 }

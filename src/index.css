@@ -2,8 +2,8 @@
 
 @layer base {
   :root {
-    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-    --font-mono: 'Fira Code', monospace;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   }
 
   body {
@@ -17,28 +17,20 @@
   }
 }
 
-/* Feminine Theme Backgrounds & Overrides */
-.theme-midnight {
-  background-color: #0e070c;
-  color: #fff1f5;
+/* Light / Dark Mode classes */
+.light {
+  color-scheme: light;
+  background-color: #f8fafc;
+  color: #0f172a;
 }
 
-.theme-dark {
-  background-color: #170d15;
-  color: #ffeef3;
+.dark {
+  color-scheme: dark;
+  background-color: #090d16;
+  color: #f1f5f9;
 }
 
-.theme-light {
-  background-color: #fff6f8;
-  color: #2b1120;
-}
-
-.theme-sepia {
-  background-color: #24181a;
-  color: #f7ebe9;
-}
-
-/* Custom 3D Card Flip Perspective */
+/* 3D Card Flip Perspective for Flashcards */
 .perspective-1000 {
   perspective: 1000px;
 }
@@ -56,7 +48,7 @@
   transform: rotateY(180deg);
 }
 
-/* Custom sleek rose scrollbar */
+/* Custom Sleek Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -67,23 +59,23 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(244, 63, 94, 0.35);
+  background: rgba(148, 163, 184, 0.35);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(244, 63, 94, 0.6);
+  background: rgba(148, 163, 184, 0.6);
 }
 
-/* Subtle feminine glow utilities */
-.glow-rose {
-  box-shadow: 0 0 25px -4px rgba(244, 63, 94, 0.4);
+/* Soft Blue and Violet Glows */
+.glow-blue {
+  box-shadow: 0 0 25px -4px rgba(59, 130, 246, 0.25);
 }
 
-.glow-pink {
-  box-shadow: 0 0 25px -4px rgba(236, 72, 153, 0.4);
+.glow-violet {
+  box-shadow: 0 0 25px -4px rgba(139, 92, 246, 0.25);
 }
 
-.glow-lavender {
-  box-shadow: 0 0 25px -4px rgba(192, 132, 252, 0.35);
+.glow-card {
+  box-shadow: 0 10px 30px -10px rgba(99, 102, 241, 0.08);
 }
