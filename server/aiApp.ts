@@ -6,6 +6,7 @@ dotenv.config();
 
 const PRIMARY_MODEL = 'gemini-3.1-flash-lite';
 const FALLBACK_MODEL = 'gemini-4-hydrogen';
+const REQUEST_TIMEOUT_MS = 25000;
 
 let aiClient: GoogleGenAI | null = null;
 let cachedApiKey: string | undefined;
@@ -40,12 +41,54 @@ function stripMarkdownFences(raw: string): string {
   return trimmed;
 }
 
+function extractResponseText(response: any): string {
+  const blockReason = response?.promptFeedback?.blockReason;
+  if (blockReason) {
+    throw new Error(`Request was blocked by Gemini safety filters (${blockReason}). Try rephrasing your topic.`);
+  }
+
+  const candidate = response?.candidates?.[0];
+  const finishReason = candidate?.finishReason;
+  if (finishReason === 'SAFETY' || finishReason === 'PROHIBITED_CONTENT' || finishReason === 'SPII') {
+    throw new Error(`Response was filtered by Gemini safety policy (${finishReason}). Please rephrase your query.`);
+  }
+
+  if (typeof response?.text === 'string' && response.text.trim()) {
+    return response.text.trim();
+  }
+
+  const parts = candidate?.content?.parts;
+  if (Array.isArray(parts)) {
+    const joined = parts
+      .filter((p: any) => !p?.thought && typeof p?.text === 'string')
+      .map((p: any) => p.text)
+      .join('')
+      .trim();
+    if (joined) return joined;
+  }
+
+  if (finishReason === 'MAX_TOKENS') {
+    throw new Error('Gemini output was truncated due to length limits. Please retry.');
+  }
+
+  throw new Error('Gemini returned an empty response. Please retry.');
+}
+
 function safeParseJson<T = any>(rawText: string | undefined): T {
   const cleaned = stripMarkdownFences(rawText || '');
   if (!cleaned) {
-    throw new Error('Gemini returned an empty response.');
+    throw new Error('Gemini returned an empty JSON response.');
   }
-  return JSON.parse(cleaned) as T;
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1)) as T;
+    }
+    throw new Error('Gemini returned malformed JSON output.');
+  }
 }
 
 function formatGeminiError(err: any): { status: number; message: string; code: string; retryable: boolean } {
@@ -64,7 +107,7 @@ function formatGeminiError(err: any): { status: number; message: string; code: s
       status: 403,
       code: 'INVALID_API_KEY',
       retryable: false,
-      message: 'Invalid or unauthorized Gemini API key. Verify GEMINI_API_KEY in your environment variables or Settings > Secrets.',
+      message: 'Invalid or unauthorized Gemini API key. Verify GEMINI_API_KEY in environment variables or Settings > Secrets.',
     };
   }
 
@@ -79,6 +122,24 @@ function formatGeminiError(err: any): { status: number; message: string; code: s
       code: 'QUOTA_EXCEEDED',
       retryable: true,
       message: 'Gemini API quota or rate limit reached. Please wait a moment and click Retry.',
+    };
+  }
+
+  if (lower.includes('timed out') || lower.includes('timeout')) {
+    return {
+      status: 504,
+      code: 'TIMEOUT',
+      retryable: true,
+      message: 'Gemini request timed out. Please click Retry.',
+    };
+  }
+
+  if (lower.includes('safety') || lower.includes('filtered')) {
+    return {
+      status: 422,
+      code: 'SAFETY_FILTERED',
+      retryable: false,
+      message: rawMessage,
     };
   }
 
@@ -100,12 +161,12 @@ function formatGeminiError(err: any): { status: number; message: string; code: s
     };
   }
 
-  if (err instanceof SyntaxError || lower.includes('json') || lower.includes('empty response')) {
+  if (err instanceof SyntaxError || lower.includes('json') || lower.includes('empty') || lower.includes('incomplete')) {
     return {
       status: 502,
       code: 'MALFORMED_AI_RESPONSE',
       retryable: true,
-      message: 'Received an incomplete or invalid structured response from Gemini. Please retry.',
+      message: rawMessage.includes('Gemini') ? rawMessage : 'Received an incomplete response from Gemini. Please retry.',
     };
   }
 
@@ -117,19 +178,24 @@ function formatGeminiError(err: any): { status: number; message: string; code: s
   };
 }
 
-/**
- * Credit-conscious call helper:
- * - Tries primary model once (only retries once on transient 503 overload, never wastes credits retrying 429 daily quota).
- * - Automatically falls back across models (e.g. gemini-3.1-flash-lite <-> gemini-4-hydrogen) only when the primary returns 429/503/404.
- */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`Gemini request timed out after ${Math.round(ms / 1000)}s.`)), ms);
+    }),
+  ]);
+}
+
 async function generateWithFallback(
   client: GoogleGenAI,
   params: Omit<Parameters<GoogleGenAI['models']['generateContent']>[0], 'model'>,
   preferredModel: string = PRIMARY_MODEL
 ) {
-  const modelsToTry = preferredModel === PRIMARY_MODEL
-    ? [PRIMARY_MODEL, FALLBACK_MODEL]
-    : [preferredModel, PRIMARY_MODEL];
+  const modelsToTry =
+    preferredModel === PRIMARY_MODEL
+      ? [PRIMARY_MODEL, FALLBACK_MODEL]
+      : [preferredModel, PRIMARY_MODEL];
 
   let lastError: any;
 
@@ -140,35 +206,37 @@ async function generateWithFallback(
       model,
     };
 
-    // Strip ThinkingLevel.MINIMAL if falling back to gemini-4-hydrogen (unsupported there)
     if (model === FALLBACK_MODEL && requestParams.config?.thinkingConfig?.thinkingLevel === ThinkingLevel.MINIMAL) {
       const { thinkingConfig: _omit, ...restConfig } = requestParams.config;
       requestParams.config = restConfig;
     }
 
     try {
-      const response = await client.models.generateContent(requestParams);
+      const response = await withTimeout(
+        client.models.generateContent(requestParams),
+        REQUEST_TIMEOUT_MS
+      );
       return { response, model };
     } catch (err: any) {
       lastError = err;
       const formatted = formatGeminiError(err);
 
-      // Brief single retry only on transient 503 overload for the primary model
       if (formatted.code === 'SERVICE_UNAVAILABLE' && i === 0) {
-        await new Promise(resolve => setTimeout(resolve, 600));
+        await new Promise(resolve => setTimeout(resolve, 500));
         try {
-          const retryResponse = await client.models.generateContent(requestParams);
+          const retryResponse = await withTimeout(
+            client.models.generateContent(requestParams),
+            REQUEST_TIMEOUT_MS
+          );
           return { response: retryResponse, model };
         } catch (retryErr) {
           lastError = retryErr;
         }
       }
 
-      // Stop immediately on invalid API key (no point trying another model)
-      if (formatted.code === 'INVALID_API_KEY') {
+      if (formatted.code === 'INVALID_API_KEY' || formatted.code === 'SAFETY_FILTERED') {
         throw err;
       }
-      // Otherwise continue to next model in list (e.g., if 429 quota hit on one model)
     }
   }
 
@@ -188,6 +256,10 @@ const EXPLANATION_SCHEMA = {
       type: Type.ARRAY,
       items: { type: Type.STRING },
     },
+    importantConcepts: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
     practicalExample: { type: Type.STRING },
     codeOrFormula: { type: Type.STRING },
     commonMisconceptions: {
@@ -202,6 +274,7 @@ const EXPLANATION_SCHEMA = {
     'introduction',
     'analogy',
     'coreMechanics',
+    'importantConcepts',
     'practicalExample',
     'commonMisconceptions',
     'summary',
@@ -339,450 +412,510 @@ function resolveChatbotModelConfig(requestedModel: string): {
   }
 }
 
-export function registerAiRoutes(app: Express) {
-  app.use(express.json({ limit: '10mb' }));
+function cleanStringArray(arr: unknown): string[] {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map(item => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean);
+}
 
-  // Health Check
-  app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({
-      ok: true,
-      geminiConfigured: Boolean((process.env.GEMINI_API_KEY || '').trim()),
-      primaryModel: PRIMARY_MODEL,
-      timestamp: new Date().toISOString(),
+// ==========================================
+// EXPORTED HANDLERS (Express + Vercel Shared)
+// ==========================================
+
+export async function handleHealth(_req: Request, res: Response) {
+  res.json({
+    ok: true,
+    geminiConfigured: Boolean((process.env.GEMINI_API_KEY || '').trim()),
+    primaryModel: PRIMARY_MODEL,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+export async function handleExplain(req: Request, res: Response) {
+  try {
+    const { topic, difficulty = 'Intermediate', style = 'Analogy-Rich', extraContext = '' } = req.body || {};
+    const cleanTopic = typeof topic === 'string' ? topic.trim() : '';
+    if (!cleanTopic) {
+      res.status(400).json({ error: 'Please enter a topic before clicking Explain Topic.' });
+      return;
+    }
+
+    const client = getAIClient();
+    if (!client) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured on the server. Add GEMINI_API_KEY to your environment variables or Settings > Secrets.',
+        code: 'MISSING_API_KEY',
+      });
+      return;
+    }
+
+    const prompt = `Explain "${cleanTopic}" thoroughly for a student.
+Difficulty Level: ${difficulty} (Beginner = clear everyday language, zero unnecessary jargon; Intermediate = university rigor and mechanisms; Advanced = formal edge cases, equations/complexity, and system tradeoffs).
+Explanation Style: ${style}.
+${extraContext ? `Additional Focus: ${String(extraContext).trim()}` : ''}
+
+Every required field MUST be populated with rich, non-empty educational content:
+- title: Clear title for "${cleanTopic}"
+- introduction: 2-3 sentence overview explaining what it is and why it matters
+- analogy: Vivid, memorable real-world analogy tailored to ${difficulty} level
+- coreMechanics: 3 to 5 clear numbered/ordered step-by-step mechanics explaining how it works
+- importantConcepts: 3 to 4 key concepts or terms formatted as "Term: clear explanation"
+- practicalExample: Concrete real-world or engineering example showing "${cleanTopic}" in action
+- codeOrFormula: Relevant mathematical formula, packet sequence diagram text, pseudocode, or code snippet (if non-mathematical, provide a concise structured flow/diagram in text)
+- commonMisconceptions: 2 to 3 common student mistakes or traps
+- summary: Crisp 1-2 sentence key takeaway`;
+
+    const { response, model } = await generateWithFallback(client, {
+      contents: prompt,
+      config: {
+        systemInstruction: 'You are ApnaBhai, an expert academic tutor. Populate every requested JSON field completely and accurately.',
+        responseMimeType: 'application/json',
+        responseSchema: EXPLANATION_SCHEMA,
+      },
     });
-  });
 
-  // 1. API: AI Tutor - Topic Explanation
-  app.post('/api/ai/explain', async (req: Request, res: Response) => {
-    try {
-      const { topic, difficulty = 'Intermediate', style = 'Analogy-Rich', extraContext = '' } = req.body || {};
-      const cleanTopic = typeof topic === 'string' ? topic.trim() : '';
-      if (!cleanTopic) {
-        res.status(400).json({ error: 'Please enter a topic before clicking Explain Topic.' });
-        return;
-      }
+    const rawText = extractResponseText(response);
+    const parsed = safeParseJson<Record<string, any>>(rawText);
 
-      const client = getAIClient();
-      if (!client) {
-        res.status(503).json({
-          error: 'GEMINI_API_KEY is not configured on the server. Add GEMINI_API_KEY to your environment variables or Settings > Secrets.',
-          code: 'MISSING_API_KEY',
-        });
-        return;
-      }
+    const title = typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : cleanTopic;
+    const introduction = typeof parsed.introduction === 'string' ? parsed.introduction.trim() : '';
+    const analogy = typeof parsed.analogy === 'string' ? parsed.analogy.trim() : '';
+    const coreMechanics = cleanStringArray(parsed.coreMechanics);
+    const importantConcepts = cleanStringArray(parsed.importantConcepts);
+    const practicalExample = typeof parsed.practicalExample === 'string' ? parsed.practicalExample.trim() : '';
+    const codeOrFormula = typeof parsed.codeOrFormula === 'string' ? parsed.codeOrFormula.trim() : '';
+    const commonMisconceptions = cleanStringArray(parsed.commonMisconceptions);
+    const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
 
-      const prompt = `Explain "${cleanTopic}" for a college student.
-Difficulty: ${difficulty} (Beginner: accessible jargon-free fundamentals; Intermediate: undergraduate rigor and mechanisms; Advanced: formal edge cases, math/complexity, and system tradeoffs).
-Style: ${style}.
-${extraContext ? `Focus: ${String(extraContext).trim()}` : ''}
-Provide:
-- Clear title, crisp 2-3 sentence introduction, memorable analogy
-- 3 to 5 clear step-by-step coreMechanics
-- A concrete practicalExample showing "${cleanTopic}" in real-world action
-- A concise codeOrFormula (formula, diagram text, packet sequence, or code snippet; empty string if inapplicable)
-- 2 to 3 commonMisconceptions students make
-- A 1-2 sentence summary takeaway`;
-
-      const { response, model } = await generateWithFallback(client, {
-        contents: prompt,
-        config: {
-          systemInstruction: 'You are an expert academic tutor for ApnaBhai. Be accurate, clear, and concise.',
-          responseMimeType: 'application/json',
-          responseSchema: EXPLANATION_SCHEMA,
-        },
-      });
-
-      const parsed = safeParseJson<Record<string, any>>(response.text);
-      if (!parsed?.introduction || !Array.isArray(parsed?.coreMechanics) || parsed.coreMechanics.length === 0) {
-        throw new Error('Incomplete structured explanation returned by Gemini.');
-      }
-
-      res.json({
-        topic: cleanTopic,
-        difficulty,
-        style,
-        title: parsed.title || cleanTopic,
-        introduction: parsed.introduction,
-        analogy: parsed.analogy || '',
-        coreMechanics: parsed.coreMechanics,
-        practicalExample: parsed.practicalExample || '',
-        codeOrFormula: parsed.codeOrFormula || '',
-        commonMisconceptions: Array.isArray(parsed.commonMisconceptions) ? parsed.commonMisconceptions : [],
-        summary: parsed.summary || '',
-        modelUsed: model,
-        disclaimer:
-          parsed.disclaimer ||
-          'AI-generated educational explanation. Verify critical formulas and exam specifics against primary course materials.',
-      });
-    } catch (err: any) {
-      console.error('[/api/ai/explain] error:', err?.message || err);
-      const formatted = formatGeminiError(err);
-      res.status(formatted.status).json({
-        error: formatted.message,
-        code: formatted.code,
-        retryable: formatted.retryable,
-      });
+    if (!introduction || !analogy || coreMechanics.length === 0 || !summary) {
+      throw new Error('Gemini returned an explanation with missing sections. Please click Retry.');
     }
-  });
 
-  // 2A. API: AI Tutor Follow-up Chat
-  app.post('/api/ai/chat', async (req: Request, res: Response) => {
-    try {
-      const { topic, messages = [], userMessage } = req.body || {};
-      const cleanUserMessage = typeof userMessage === 'string' ? userMessage.trim() : '';
-      if (!cleanUserMessage) {
-        res.status(400).json({ error: 'Please enter a follow-up question.' });
-        return;
-      }
+    res.json({
+      topic: cleanTopic,
+      difficulty,
+      style,
+      title,
+      introduction,
+      analogy,
+      coreMechanics,
+      importantConcepts,
+      practicalExample,
+      codeOrFormula,
+      commonMisconceptions,
+      summary,
+      modelUsed: model,
+      disclaimer:
+        (typeof parsed.disclaimer === 'string' && parsed.disclaimer.trim()) ||
+        'AI-generated educational explanation. Verify critical formulas and exam specifics against primary course materials.',
+    });
+  } catch (err: any) {
+    console.error('[/api/ai/explain] error:', err?.message || err);
+    const formatted = formatGeminiError(err);
+    res.status(formatted.status).json({
+      error: formatted.message,
+      code: formatted.code,
+      retryable: formatted.retryable,
+    });
+  }
+}
 
-      const client = getAIClient();
-      if (!client) {
-        res.status(503).json({
-          error: 'GEMINI_API_KEY is not configured on the server. Add GEMINI_API_KEY in Settings > Secrets or deployment env vars.',
-          code: 'MISSING_API_KEY',
-        });
-        return;
-      }
+export async function handleChat(req: Request, res: Response) {
+  try {
+    const {
+      topic,
+      difficulty = 'Intermediate',
+      style = 'Analogy-Rich',
+      explanationContext,
+      messages = [],
+      userMessage,
+    } = req.body || {};
 
-      // Build normalized alternating multi-turn contents starting with 'user'
-      const normalizedTurns: Array<{ role: 'user' | 'model'; text: string }> = [];
-      for (const msg of Array.isArray(messages) ? messages : []) {
-        const text = typeof msg?.text === 'string' ? msg.text.trim() : '';
-        if (!text) continue;
-        const msgRole: 'user' | 'model' = msg.role === 'user' ? 'user' : 'model';
-        if (normalizedTurns.length === 0 && msgRole !== 'user') continue;
-        const prev = normalizedTurns[normalizedTurns.length - 1];
-        if (prev && prev.role === msgRole) {
-          prev.text = `${prev.text}\n\n${text}`;
-        } else {
-          normalizedTurns.push({ role: msgRole, text });
-        }
-      }
-
-      // Ensure latest userMessage is the final user turn
-      const last = normalizedTurns[normalizedTurns.length - 1];
-      if (!last || last.role !== 'user' || last.text !== cleanUserMessage) {
-        if (last && last.role === 'user') {
-          last.text = cleanUserMessage;
-        } else {
-          normalizedTurns.push({ role: 'user', text: cleanUserMessage });
-        }
-      }
-
-      const contents = normalizedTurns.map(turn => ({
-        role: turn.role,
-        parts: [{ text: turn.text }],
-      }));
-
-      const { response, model } = await generateWithFallback(client, {
-        contents,
-        config: {
-          systemInstruction: `You are ApnaBhai's academic tutor helping a student study "${topic || 'General Studies'}". Answer clearly in 1-3 short paragraphs with a concrete example or formula when helpful.`,
-        },
-      });
-
-      const reply = (response.text || '').trim();
-      if (!reply) {
-        throw new Error('Gemini returned an empty tutor reply.');
-      }
-
-      res.json({
-        reply,
-        model,
-        disclaimer: 'AI-generated tutor reply. Verify critical answers against primary references.',
-      });
-    } catch (err: any) {
-      console.error('[/api/ai/chat] error:', err?.message || err);
-      const formatted = formatGeminiError(err);
-      res.status(formatted.status).json({
-        error: formatted.message,
-        code: formatted.code,
-        retryable: formatted.retryable,
-      });
+    const cleanUserMessage = typeof userMessage === 'string' ? userMessage.trim() : '';
+    if (!cleanUserMessage) {
+      res.status(400).json({ error: 'Please enter a follow-up question.' });
+      return;
     }
-  });
 
-  // 2B. API: Dedicated Multi-turn Gemini Chatbot Drawer
-  app.post('/api/ai/chatbot', async (req: Request, res: Response) => {
-    try {
-      const { messages = [], role = 'socratic', model = PRIMARY_MODEL } = req.body || {};
-
-      const systemInstruction = PERSONA_PROMPTS[role] || PERSONA_PROMPTS.socratic;
-      const resolved = resolveChatbotModelConfig(model);
-
-      const client = getAIClient();
-      if (!client) {
-        res.status(503).json({
-          error: 'GEMINI_API_KEY is not configured. Please add GEMINI_API_KEY in Settings > Secrets or deployment env vars.',
-          code: 'MISSING_API_KEY',
-        });
-        return;
-      }
-
-      const rawContents: Array<{ role: 'user' | 'model'; text: string }> = [];
-      for (const msg of Array.isArray(messages) ? messages : []) {
-        const text = typeof msg?.text === 'string' ? msg.text.trim() : '';
-        if (!text) continue;
-        const msgRole: 'user' | 'model' = msg.role === 'user' ? 'user' : 'model';
-        if (rawContents.length === 0 && msgRole !== 'user') continue;
-        const prev = rawContents[rawContents.length - 1];
-        if (prev && prev.role === msgRole) {
-          prev.text = `${prev.text}\n\n${text}`;
-        } else {
-          rawContents.push({ role: msgRole, text });
-        }
-      }
-
-      if (rawContents.length === 0) {
-        res.status(400).json({ error: 'Please enter a message to start the conversation.' });
-        return;
-      }
-
-      const contents = rawContents.map(item => ({
-        role: item.role,
-        parts: [{ text: item.text }],
-      }));
-
-      const config: any = { systemInstruction };
-      if (resolved.thinkingLevel) {
-        config.thinkingConfig = { thinkingLevel: resolved.thinkingLevel };
-      }
-
-      const { response, model: usedModel } = await generateWithFallback(
-        client,
-        { contents, config },
-        resolved.model
-      );
-
-      const replyText = (response.text || '').trim();
-      if (!replyText) {
-        throw new Error('Gemini returned an empty reply.');
-      }
-
-      res.json({
-        reply: replyText,
-        model: usedModel === resolved.model ? resolved.displayLabel : usedModel,
-        role,
-        disclaimer: 'AI-generated study guidance. Verify critical formulas with primary academic sources.',
+    const client = getAIClient();
+    if (!client) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured on the server. Add GEMINI_API_KEY in Settings > Secrets or deployment env vars.',
+        code: 'MISSING_API_KEY',
       });
-    } catch (err: any) {
-      console.error('[/api/ai/chatbot] error:', err?.message || err);
-      const formatted = formatGeminiError(err);
-      res.status(formatted.status).json({
-        error: formatted.message,
-        code: formatted.code,
-        retryable: formatted.retryable,
-      });
+      return;
     }
-  });
 
-  // 3. API: Quiz Generator
-  app.post('/api/ai/quiz', async (req: Request, res: Response) => {
-    try {
-      const { topic, difficulty = 'Intermediate', questionCount = 5, questionTypes = ['mcq', 'tf', 'short'] } = req.body || {};
-      const cleanTopic = typeof topic === 'string' ? topic.trim() : '';
-      if (!cleanTopic) {
-        res.status(400).json({ error: 'Quiz topic is required.' });
-        return;
+    const normalizedTurns: Array<{ role: 'user' | 'model'; text: string }> = [];
+    for (const msg of Array.isArray(messages) ? messages : []) {
+      const text = typeof msg?.text === 'string' ? msg.text.trim() : '';
+      if (!text || text.startsWith('Error:')) continue;
+      const msgRole: 'user' | 'model' = msg.role === 'user' ? 'user' : 'model';
+      if (normalizedTurns.length === 0 && msgRole !== 'user') continue;
+      const prev = normalizedTurns[normalizedTurns.length - 1];
+      if (prev && prev.role === msgRole) {
+        prev.text = `${prev.text}\n\n${text}`;
+      } else {
+        normalizedTurns.push({ role: msgRole, text });
       }
+    }
 
-      const client = getAIClient();
-      if (!client) {
-        res.status(503).json({
-          error: 'GEMINI_API_KEY is not configured on the server.',
-          code: 'MISSING_API_KEY',
-        });
-        return;
+    const last = normalizedTurns[normalizedTurns.length - 1];
+    if (!last || last.role !== 'user' || last.text !== cleanUserMessage) {
+      if (last && last.role === 'user') {
+        last.text = cleanUserMessage;
+      } else {
+        normalizedTurns.push({ role: 'user', text: cleanUserMessage });
       }
+    }
 
-      const prompt = `Generate a ${questionCount}-question university quiz on "${cleanTopic}" (${difficulty} level).
+    const contents = normalizedTurns.map(turn => ({
+      role: turn.role,
+      parts: [{ text: turn.text }],
+    }));
+
+    // Build rich grounded context from the currently viewed explanation
+    let contextBlock = `Current Topic: "${topic || 'General Studies'}"\nSelected Difficulty: ${difficulty}\nSelected Style: ${style}`;
+    if (explanationContext && typeof explanationContext === 'object') {
+      const steps = Array.isArray(explanationContext.coreMechanics)
+        ? explanationContext.coreMechanics
+            .map((step: string, i: number) => `  Step ${i + 1}: ${step}`)
+            .join('\n')
+        : '';
+      const concepts = Array.isArray(explanationContext.importantConcepts)
+        ? explanationContext.importantConcepts.join(' | ')
+        : '';
+
+      contextBlock += `
+Current Explanation Reference (use this whenever the student refers to "step 2", "the analogy", "that example", or asks to clarify/simplify):
+- Title: ${explanationContext.title || topic || ''}
+- Introduction: ${explanationContext.introduction || ''}
+- Analogy already shown: ${explanationContext.analogy || ''}
+- Step-by-Step Mechanics:\n${steps}
+- Important Concepts: ${concepts}
+- Practical Example already shown: ${explanationContext.practicalExample || ''}
+- Code/Formula: ${explanationContext.codeOrFormula || ''}
+- Key Takeaway: ${explanationContext.summary || ''}`;
+    }
+
+    const systemInstruction = `You are ApnaBhai's interactive Follow-up AI Tutor.
+${contextBlock}
+
+Instructions:
+1. Answer directly and conversationally in clean Markdown (short paragraphs, bullet points, bold emphasis, or code/formula blocks where useful).
+2. Always match the student's selected difficulty (${difficulty}) unless they ask you to simplify or go deeper.
+3. If the student says "Simplify step 2", "Clarify more", "Give another analogy", or "Explain with a practical example", refer directly to the Current Explanation Reference above (e.g., rewrite Step 2 in simpler words, or invent a brand-new analogy different from the one already shown).
+4. If the student asks an unrelated/off-topic question, answer it briefly and politely or explain the distinction, then smoothly invite them back to "${topic || 'the current topic'}".
+5. Keep answers focused and concise (2-4 short paragraphs max). Never return an empty reply.`;
+
+    const { response, model } = await generateWithFallback(client, {
+      contents,
+      config: { systemInstruction },
+    });
+
+    const reply = extractResponseText(response);
+
+    res.json({
+      reply,
+      model,
+      disclaimer: 'AI-generated tutor reply. Verify critical answers against primary references.',
+    });
+  } catch (err: any) {
+    console.error('[/api/ai/chat] error:', err?.message || err);
+    const formatted = formatGeminiError(err);
+    res.status(formatted.status).json({
+      error: formatted.message,
+      code: formatted.code,
+      retryable: formatted.retryable,
+    });
+  }
+}
+
+export async function handleChatbot(req: Request, res: Response) {
+  try {
+    const { messages = [], role = 'socratic', model = PRIMARY_MODEL } = req.body || {};
+
+    const systemInstruction = PERSONA_PROMPTS[role] || PERSONA_PROMPTS.socratic;
+    const resolved = resolveChatbotModelConfig(model);
+
+    const client = getAIClient();
+    if (!client) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured. Please add GEMINI_API_KEY in Settings > Secrets or deployment env vars.',
+        code: 'MISSING_API_KEY',
+      });
+      return;
+    }
+
+    const rawContents: Array<{ role: 'user' | 'model'; text: string }> = [];
+    for (const msg of Array.isArray(messages) ? messages : []) {
+      const text = typeof msg?.text === 'string' ? msg.text.trim() : '';
+      if (!text) continue;
+      const msgRole: 'user' | 'model' = msg.role === 'user' ? 'user' : 'model';
+      if (rawContents.length === 0 && msgRole !== 'user') continue;
+      const prev = rawContents[rawContents.length - 1];
+      if (prev && prev.role === msgRole) {
+        prev.text = `${prev.text}\n\n${text}`;
+      } else {
+        rawContents.push({ role: msgRole, text });
+      }
+    }
+
+    if (rawContents.length === 0) {
+      res.status(400).json({ error: 'Please enter a message to start the conversation.' });
+      return;
+    }
+
+    const contents = rawContents.map(item => ({
+      role: item.role,
+      parts: [{ text: item.text }],
+    }));
+
+    const config: any = { systemInstruction };
+    if (resolved.thinkingLevel) {
+      config.thinkingConfig = { thinkingLevel: resolved.thinkingLevel };
+    }
+
+    const { response, model: usedModel } = await generateWithFallback(
+      client,
+      { contents, config },
+      resolved.model
+    );
+
+    const replyText = extractResponseText(response);
+
+    res.json({
+      reply: replyText,
+      model: usedModel === resolved.model ? resolved.displayLabel : usedModel,
+      role,
+      disclaimer: 'AI-generated study guidance. Verify critical formulas with primary academic sources.',
+    });
+  } catch (err: any) {
+    console.error('[/api/ai/chatbot] error:', err?.message || err);
+    const formatted = formatGeminiError(err);
+    res.status(formatted.status).json({
+      error: formatted.message,
+      code: formatted.code,
+      retryable: formatted.retryable,
+    });
+  }
+}
+
+export async function handleQuiz(req: Request, res: Response) {
+  try {
+    const { topic, difficulty = 'Intermediate', questionCount = 5, questionTypes = ['mcq', 'tf', 'short'] } = req.body || {};
+    const cleanTopic = typeof topic === 'string' ? topic.trim() : '';
+    if (!cleanTopic) {
+      res.status(400).json({ error: 'Quiz topic is required.' });
+      return;
+    }
+
+    const client = getAIClient();
+    if (!client) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured on the server.',
+        code: 'MISSING_API_KEY',
+      });
+      return;
+    }
+
+    const prompt = `Generate a ${questionCount}-question university quiz on "${cleanTopic}" (${difficulty} level).
 Allowed types: ${JSON.stringify(questionTypes)}.
 For "mcq" provide 4 options and 0-based correctIndex.
 For "tf" provide options ["True", "False"] and 0-based correctIndex.
 For "short" provide sampleAnswer and keyTerms.
 Set points: 10 per question.`;
 
-      const { response } = await generateWithFallback(client, {
-        contents: prompt,
-        config: {
-          systemInstruction: 'You are an exam writer for ApnaBhai. Output accurate questions and clear answer explanations.',
-          responseMimeType: 'application/json',
-          responseSchema: QUIZ_SCHEMA,
-        },
-      });
+    const { response } = await generateWithFallback(client, {
+      contents: prompt,
+      config: {
+        systemInstruction: 'You are an exam writer for ApnaBhai. Output accurate questions and clear answer explanations.',
+        responseMimeType: 'application/json',
+        responseSchema: QUIZ_SCHEMA,
+      },
+    });
 
-      const parsed = safeParseJson<Record<string, any>>(response.text);
-      if (!Array.isArray(parsed?.questions) || parsed.questions.length === 0) {
-        throw new Error('Quiz generator returned no questions.');
-      }
-
-      res.json({
-        topic: cleanTopic,
-        difficulty,
-        questions: parsed.questions,
-        disclaimer:
-          parsed.disclaimer ||
-          'AI-generated quiz questions. Always check critical grading criteria against your syllabus.',
-      });
-    } catch (err: any) {
-      console.error('[/api/ai/quiz] error:', err?.message || err);
-      const formatted = formatGeminiError(err);
-      res.status(formatted.status).json({ error: formatted.message, code: formatted.code });
+    const parsed = safeParseJson<Record<string, any>>(extractResponseText(response));
+    if (!Array.isArray(parsed?.questions) || parsed.questions.length === 0) {
+      throw new Error('Quiz generator returned no questions.');
     }
-  });
 
-  // 4. API: Revision Notes Generator
-  app.post('/api/ai/notes', async (req: Request, res: Response) => {
-    try {
-      const { topic, detailLevel = 'Comprehensive', subject = 'Computer Science & AI' } = req.body || {};
-      const cleanTopic = typeof topic === 'string' ? topic.trim() : '';
-      if (!cleanTopic) {
-        res.status(400).json({ error: 'Topic is required for revision notes.' });
-        return;
-      }
+    res.json({
+      topic: cleanTopic,
+      difficulty,
+      questions: parsed.questions,
+      disclaimer:
+        parsed.disclaimer ||
+        'AI-generated quiz questions. Always check critical grading criteria against your syllabus.',
+    });
+  } catch (err: any) {
+    console.error('[/api/ai/quiz] error:', err?.message || err);
+    const formatted = formatGeminiError(err);
+    res.status(formatted.status).json({ error: formatted.message, code: formatted.code });
+  }
+}
 
-      const client = getAIClient();
-      if (!client) {
-        res.status(503).json({
-          error: 'GEMINI_API_KEY is not configured on the server.',
-          code: 'MISSING_API_KEY',
-        });
-        return;
-      }
+export async function handleNotes(req: Request, res: Response) {
+  try {
+    const { topic, detailLevel = 'Comprehensive', subject = 'Computer Science & AI' } = req.body || {};
+    const cleanTopic = typeof topic === 'string' ? topic.trim() : '';
+    if (!cleanTopic) {
+      res.status(400).json({ error: 'Topic is required for revision notes.' });
+      return;
+    }
 
-      const prompt = `Generate structured "${detailLevel}" revision notes on "${cleanTopic}" under subject "${subject}".
+    const client = getAIClient();
+    if (!client) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured on the server.',
+        code: 'MISSING_API_KEY',
+      });
+      return;
+    }
+
+    const prompt = `Generate structured "${detailLevel}" revision notes on "${cleanTopic}" under subject "${subject}".
 Include: title, overview, 3 structured sections (heading + concise high-yield content), 3 keyDefinitions, formulasAndTheorems (if applicable), 3 examQuickTips, and a summary.`;
 
-      const { response } = await generateWithFallback(client, {
-        contents: prompt,
-        config: {
-          systemInstruction: 'You are an academic curriculum specialist for ApnaBhai.',
-          responseMimeType: 'application/json',
-          responseSchema: NOTES_SCHEMA,
-        },
-      });
+    const { response } = await generateWithFallback(client, {
+      contents: prompt,
+      config: {
+        systemInstruction: 'You are an academic curriculum specialist for ApnaBhai.',
+        responseMimeType: 'application/json',
+        responseSchema: NOTES_SCHEMA,
+      },
+    });
 
-      const parsed = safeParseJson<Record<string, any>>(response.text);
-      if (!parsed?.overview || !Array.isArray(parsed?.sections)) {
-        throw new Error('Revision notes generator returned incomplete output.');
-      }
-
-      res.json({
-        title: parsed.title || `Revision Notes: ${cleanTopic}`,
-        subject: parsed.subject || subject,
-        detailLevel: parsed.detailLevel || detailLevel,
-        overview: parsed.overview,
-        sections: parsed.sections,
-        keyDefinitions: Array.isArray(parsed.keyDefinitions) ? parsed.keyDefinitions : [],
-        formulasAndTheorems: Array.isArray(parsed.formulasAndTheorems) ? parsed.formulasAndTheorems : [],
-        examQuickTips: Array.isArray(parsed.examQuickTips) ? parsed.examQuickTips : [],
-        summary: parsed.summary || '',
-        disclaimer:
-          parsed.disclaimer ||
-          'AI-generated study notes. Verify critical formulas and dates against official course syllabi.',
-      });
-    } catch (err: any) {
-      console.error('[/api/ai/notes] error:', err?.message || err);
-      const formatted = formatGeminiError(err);
-      res.status(formatted.status).json({ error: formatted.message, code: formatted.code });
+    const parsed = safeParseJson<Record<string, any>>(extractResponseText(response));
+    if (!parsed?.overview || !Array.isArray(parsed?.sections)) {
+      throw new Error('Revision notes generator returned incomplete output.');
     }
-  });
 
-  // 5. API: Flashcards Generator
-  app.post('/api/ai/flashcards', async (req: Request, res: Response) => {
-    try {
-      const { topic, count = 6, difficulty = 'Intermediate' } = req.body || {};
-      const cleanTopic = typeof topic === 'string' ? topic.trim() : '';
-      if (!cleanTopic) {
-        res.status(400).json({ error: 'Topic is required for flashcard generation.' });
-        return;
-      }
+    res.json({
+      title: parsed.title || `Revision Notes: ${cleanTopic}`,
+      subject: parsed.subject || subject,
+      detailLevel: parsed.detailLevel || detailLevel,
+      overview: parsed.overview,
+      sections: parsed.sections,
+      keyDefinitions: Array.isArray(parsed.keyDefinitions) ? parsed.keyDefinitions : [],
+      formulasAndTheorems: Array.isArray(parsed.formulasAndTheorems) ? parsed.formulasAndTheorems : [],
+      examQuickTips: Array.isArray(parsed.examQuickTips) ? parsed.examQuickTips : [],
+      summary: parsed.summary || '',
+      disclaimer:
+        parsed.disclaimer ||
+        'AI-generated study notes. Verify critical formulas and dates against official course syllabi.',
+    });
+  } catch (err: any) {
+    console.error('[/api/ai/notes] error:', err?.message || err);
+    const formatted = formatGeminiError(err);
+    res.status(formatted.status).json({ error: formatted.message, code: formatted.code });
+  }
+}
 
-      const client = getAIClient();
-      if (!client) {
-        res.status(503).json({
-          error: 'GEMINI_API_KEY is not configured on the server.',
-          code: 'MISSING_API_KEY',
-        });
-        return;
-      }
+export async function handleFlashcards(req: Request, res: Response) {
+  try {
+    const { topic, count = 6, difficulty = 'Intermediate' } = req.body || {};
+    const cleanTopic = typeof topic === 'string' ? topic.trim() : '';
+    if (!cleanTopic) {
+      res.status(400).json({ error: 'Topic is required for flashcard generation.' });
+      return;
+    }
 
-      const prompt = `Create ${count} active-recall flashcards on "${cleanTopic}" (${difficulty} level).
+    const client = getAIClient();
+    if (!client) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured on the server.',
+        code: 'MISSING_API_KEY',
+      });
+      return;
+    }
+
+    const prompt = `Create ${count} active-recall flashcards on "${cleanTopic}" (${difficulty} level).
 Each card needs: id, question, concise accurate answer, helpful hint, and short tag.`;
 
-      const { response } = await generateWithFallback(client, {
-        contents: prompt,
-        config: {
-          systemInstruction: 'You create spaced-repetition flashcards for ApnaBhai.',
-          responseMimeType: 'application/json',
-          responseSchema: FLASHCARDS_SCHEMA,
-        },
-      });
+    const { response } = await generateWithFallback(client, {
+      contents: prompt,
+      config: {
+        systemInstruction: 'You create spaced-repetition flashcards for ApnaBhai.',
+        responseMimeType: 'application/json',
+        responseSchema: FLASHCARDS_SCHEMA,
+      },
+    });
 
-      const parsed = safeParseJson<Record<string, any>>(response.text);
-      if (!Array.isArray(parsed?.flashcards) || parsed.flashcards.length === 0) {
-        throw new Error('Flashcards generator returned empty deck.');
-      }
-
-      res.json({
-        topic: cleanTopic,
-        flashcards: parsed.flashcards,
-        disclaimer:
-          parsed.disclaimer ||
-          'AI-generated active recall flashcards. Verify critical terms with trusted references.',
-      });
-    } catch (err: any) {
-      console.error('[/api/ai/flashcards] error:', err?.message || err);
-      const formatted = formatGeminiError(err);
-      res.status(formatted.status).json({ error: formatted.message, code: formatted.code });
+    const parsed = safeParseJson<Record<string, any>>(extractResponseText(response));
+    if (!Array.isArray(parsed?.flashcards) || parsed.flashcards.length === 0) {
+      throw new Error('Flashcards generator returned empty deck.');
     }
-  });
 
-  // 6. API: Core AI Topic Interactive Playground
-  app.post('/api/ai/ai-concept-test', async (req: Request, res: Response) => {
-    try {
-      const { conceptType, userPrompt, taskInput } = req.body || {};
-      const client = getAIClient();
-      if (!client) {
-        res.status(503).json({
-          error: 'GEMINI_API_KEY is not configured on the server.',
-          code: 'MISSING_API_KEY',
-        });
-        return;
-      }
+    res.json({
+      topic: cleanTopic,
+      flashcards: parsed.flashcards,
+      disclaimer:
+        parsed.disclaimer ||
+        'AI-generated active recall flashcards. Verify critical terms with trusted references.',
+    });
+  } catch (err: any) {
+    console.error('[/api/ai/flashcards] error:', err?.message || err);
+    const formatted = formatGeminiError(err);
+    res.status(formatted.status).json({ error: formatted.message, code: formatted.code });
+  }
+}
 
-      const prompt = `Demonstrate the AI concept "${conceptType || 'prompting'}".
+export async function handleConceptTest(req: Request, res: Response) {
+  try {
+    const { conceptType, userPrompt, taskInput } = req.body || {};
+    const client = getAIClient();
+    if (!client) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured on the server.',
+        code: 'MISSING_API_KEY',
+      });
+      return;
+    }
+
+    const prompt = `Demonstrate the AI concept "${conceptType || 'prompting'}".
 Student prompt or input: "${userPrompt || taskInput || ''}".
 Return JSON with: technique, output (the demonstration result), and analysis (2-sentence educational explanation).`;
 
-      const { response } = await generateWithFallback(client, {
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              technique: { type: Type.STRING },
-              output: { type: Type.STRING },
-              analysis: { type: Type.STRING },
-            },
-            required: ['technique', 'output', 'analysis'],
+    const { response } = await generateWithFallback(client, {
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            technique: { type: Type.STRING },
+            output: { type: Type.STRING },
+            analysis: { type: Type.STRING },
           },
+          required: ['technique', 'output', 'analysis'],
         },
-      });
+      },
+    });
 
-      const parsed = safeParseJson<Record<string, any>>(response.text);
-      res.json({
-        technique: parsed.technique || conceptType || 'AI Concept',
-        output: parsed.output || '',
-        analysis: parsed.analysis || '',
-      });
-    } catch (err: any) {
-      console.error('[/api/ai/ai-concept-test] error:', err?.message || err);
-      const formatted = formatGeminiError(err);
-      res.status(formatted.status).json({ error: formatted.message, code: formatted.code });
-    }
-  });
+    const parsed = safeParseJson<Record<string, any>>(extractResponseText(response));
+    res.json({
+      technique: parsed.technique || conceptType || 'AI Concept',
+      output: parsed.output || '',
+      analysis: parsed.analysis || '',
+    });
+  } catch (err: any) {
+    console.error('[/api/ai/ai-concept-test] error:', err?.message || err);
+    const formatted = formatGeminiError(err);
+    res.status(formatted.status).json({ error: formatted.message, code: formatted.code });
+  }
+}
+
+export function registerAiRoutes(app: Express) {
+  app.use(express.json({ limit: '10mb' }));
+  app.get('/api/health', handleHealth);
+  app.post('/api/ai/explain', handleExplain);
+  app.post('/api/ai/chat', handleChat);
+  app.post('/api/ai/chatbot', handleChatbot);
+  app.post('/api/ai/quiz', handleQuiz);
+  app.post('/api/ai/notes', handleNotes);
+  app.post('/api/ai/flashcards', handleFlashcards);
+  app.post('/api/ai/ai-concept-test', handleConceptTest);
 }
 
 export const aiApp = express();

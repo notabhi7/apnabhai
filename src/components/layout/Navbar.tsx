@@ -34,6 +34,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth }) => {
     { id: 'flashcards', label: 'Flashcards' },
     { id: 'ai-concepts', label: 'AI Concepts' },
     { id: '3d-lab', label: '3D Lab' },
+    { id: 'analytics-studio', label: 'Analytics' },
     { id: 'study-library', label: 'Library' },
   ];
 

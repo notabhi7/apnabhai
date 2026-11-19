@@ -43,8 +43,11 @@ interface StudyContextType {
   isExplaining: boolean;
   isChatting: boolean;
   explainError: string | null;
+  chatError: string | null;
   clearExplainError: () => void;
+  clearChatError: () => void;
   retryLastExplanation: () => Promise<ExplanationResult | null>;
+  retryLastTutorMessage: () => Promise<void>;
   generateExplanation: (topic: string, difficulty: ExplanationDifficulty, style: ExplanationStyle, extraContext?: string) => Promise<ExplanationResult | null>;
   sendTutorMessage: (text: string) => Promise<void>;
   saveCurrentExplanation: () => void;
@@ -111,27 +114,46 @@ function saveStorage<T>(key: string, value: T) {
   }
 }
 
+function isValidExplanation(exp: any): exp is ExplanationResult {
+  if (!exp || typeof exp !== 'object') return false;
+  const hasIntro = typeof exp.introduction === 'string' && exp.introduction.trim().length > 0;
+  const hasAnalogy = typeof exp.analogy === 'string' && exp.analogy.trim().length > 0;
+  const hasSummary = typeof exp.summary === 'string' && exp.summary.trim().length > 0;
+  const hasMechanics =
+    Array.isArray(exp.coreMechanics) &&
+    exp.coreMechanics.some((step: unknown) => typeof step === 'string' && step.trim().length > 0);
+  return hasIntro && hasAnalogy && hasSummary && hasMechanics;
+}
+
 export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { firebaseUser, user } = useAuth();
   const [activePage, setActivePage] = useState<PageView>('landing');
 
-  // AI Tutor States
-  const [currentExplanation, setCurrentExplanation] = useState<ExplanationResult | null>(() =>
-    loadStorage('current_explanation', null)
-  );
-  const [tutorChatHistory, setTutorChatHistory] = useState<ChatMessage[]>(() =>
-    loadStorage('tutor_chat', [
+  // AI Tutor States (validate cached storage so incomplete old records never render empty sections)
+  const [currentExplanation, setCurrentExplanation] = useState<ExplanationResult | null>(() => {
+    const cached = loadStorage<any>('current_explanation', null);
+    return isValidExplanation(cached) ? cached : null;
+  });
+  const [tutorChatHistory, setTutorChatHistory] = useState<ChatMessage[]>(() => {
+    const cached = loadStorage<ChatMessage[]>('tutor_chat', []);
+    const valid = Array.isArray(cached)
+      ? cached.filter(m => m && typeof m.text === 'string' && m.text.trim().length > 0 && !m.isError)
+      : [];
+    if (valid.length > 0) return valid;
+    return [
       {
         id: 'msg-welcome',
         role: 'assistant',
-        text: 'Hello! I am your AI Study Buddy tutor. Enter any topic above or ask me any question to break down difficult concepts with clear analogies!',
+        text: 'Hello! I am your **ApnaBhai AI Tutor**. Enter any topic above to get a structured breakdown, then ask follow-up questions here!',
         timestamp: 'Just now'
       }
-    ])
-  );
+    ];
+  });
   const [isExplaining, setIsExplaining] = useState(false);
   const [isChatting, setIsChatting] = useState(false);
   const [explainError, setExplainError] = useState<string | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [lastFailedChatText, setLastFailedChatText] = useState<string | null>(null);
   const [lastExplainParams, setLastExplainParams] = useState<{
     topic: string;
     difficulty: ExplanationDifficulty;
@@ -269,15 +291,23 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   async function postApiJson<T = any>(url: string, payload: unknown): Promise<T> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
     let res: globalThis.Response;
     try {
       res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
       });
     } catch (networkErr: any) {
+      if (networkErr?.name === 'AbortError') {
+        throw new Error('Request timed out after 30 seconds. Please retry.');
+      }
       throw new Error(networkErr?.message || 'Network error: unable to reach the server. Check your connection.');
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     const rawText = await res.text();
@@ -299,6 +329,7 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }
 
   const clearExplainError = () => setExplainError(null);
+  const clearChatError = () => setChatError(null);
 
   // 1. AI Tutor Actions
   const generateExplanation = async (
@@ -312,6 +343,7 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     setLastExplainParams({ topic: cleanTopic, difficulty, style, extraContext });
     setExplainError(null);
+    setChatError(null);
     setIsExplaining(true);
 
     try {
@@ -322,8 +354,8 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         extraContext
       });
 
-      if (!data?.introduction || !Array.isArray(data?.coreMechanics)) {
-        throw new Error('Received an incomplete explanation from Gemini. Please retry.');
+      if (!isValidExplanation(data)) {
+        throw new Error('Gemini returned an incomplete explanation missing core sections. Please click Retry.');
       }
 
       const result: ExplanationResult = {
@@ -332,15 +364,23 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         topic: cleanTopic,
         difficulty,
         style,
+        coreMechanics: data.coreMechanics.filter((s: string) => s.trim().length > 0),
+        importantConcepts: Array.isArray(data.importantConcepts)
+          ? data.importantConcepts.filter((s: string) => typeof s === 'string' && s.trim().length > 0)
+          : [],
+        commonMisconceptions: Array.isArray(data.commonMisconceptions)
+          ? data.commonMisconceptions.filter((s: string) => typeof s === 'string' && s.trim().length > 0)
+          : [],
         createdAt: new Date().toISOString(),
         saved: false
       };
+
       setCurrentExplanation(result);
       setTutorChatHistory([
         {
           id: `msg-${Date.now()}`,
           role: 'assistant',
-          text: `I've prepared a ${difficulty.toLowerCase()}-level (${style}) explanation for **${cleanTopic}**. Feel free to ask follow-up questions, request more analogies, or explore formulas!`,
+          text: `I've prepared a **${difficulty}** (${style}) breakdown for **${cleanTopic}**. Ask me to clarify any step, simplify Step 2, give another analogy, or show another example!`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
@@ -368,54 +408,76 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
   };
 
-  const sendTutorMessage = async (text: string) => {
+  const sendTutorMessage = async (text: string, isRetry: boolean = false) => {
     const cleanText = text.trim();
     if (!cleanText || isChatting) return;
 
-    const userMsg: ChatMessage = {
-      id: `usr-${Date.now()}`,
-      role: 'user',
-      text: cleanText,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-    const nextHistory = [...tutorChatHistory, userMsg];
-    setTutorChatHistory(nextHistory);
+    setChatError(null);
+
+    let conversationToSend: ChatMessage[];
+    if (isRetry) {
+      conversationToSend = tutorChatHistory.filter(m => !m.isError && m.text.trim().length > 0);
+    } else {
+      const userMsg: ChatMessage = {
+        id: `usr-${Date.now()}`,
+        role: 'user',
+        text: cleanText,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      conversationToSend = [...tutorChatHistory.filter(m => !m.isError && m.text.trim().length > 0), userMsg];
+      setTutorChatHistory(prev => [...prev, userMsg]);
+    }
+
+    setLastFailedChatText(cleanText);
     setIsChatting(true);
 
     try {
-      const data = await postApiJson<{ reply: string }>('/api/ai/chat', {
+      const data = await postApiJson<{ reply: string; model?: string }>('/api/ai/chat', {
         topic: currentExplanation?.topic || 'General Topic',
-        messages: nextHistory,
+        difficulty: currentExplanation?.difficulty || 'Intermediate',
+        style: currentExplanation?.style || 'Analogy-Rich',
+        explanationContext: currentExplanation
+          ? {
+              title: currentExplanation.title,
+              introduction: currentExplanation.introduction,
+              analogy: currentExplanation.analogy,
+              coreMechanics: currentExplanation.coreMechanics,
+              importantConcepts: currentExplanation.importantConcepts,
+              practicalExample: currentExplanation.practicalExample,
+              codeOrFormula: currentExplanation.codeOrFormula,
+              summary: currentExplanation.summary
+            }
+          : null,
+        messages: conversationToSend,
         userMessage: cleanText
       });
 
-      if (!data?.reply) {
-        throw new Error('Tutor returned an empty reply.');
+      const replyText = typeof data?.reply === 'string' ? data.reply.trim() : '';
+      if (!replyText) {
+        throw new Error('Tutor returned an empty reply. Please try again.');
       }
 
+      setLastFailedChatText(null);
       const botMsg: ChatMessage = {
         id: `bot-${Date.now()}`,
         role: 'assistant',
-        text: data.reply,
+        text: replyText,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       setTutorChatHistory(prev => [...prev, botMsg]);
     } catch (e: any) {
       const message = e?.message || 'Unable to get a follow-up answer right now.';
       console.error('Tutor follow-up chat failed:', message);
+      setChatError(message);
       showToast(message, 'error');
-      setTutorChatHistory(prev => [
-        ...prev,
-        {
-          id: `bot-${Date.now()}`,
-          role: 'assistant',
-          text: `Error: ${message}`,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        }
-      ]);
     } finally {
       setIsChatting(false);
     }
+  };
+
+  const retryLastTutorMessage = async () => {
+    if (!lastFailedChatText || isChatting) return;
+    await sendTutorMessage(lastFailedChatText, true);
   };
 
   const saveCurrentExplanation = () => {
@@ -802,8 +864,11 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isExplaining,
         isChatting,
         explainError,
+        chatError,
         clearExplainError,
+        clearChatError,
         retryLastExplanation,
+        retryLastTutorMessage,
         generateExplanation,
         sendTutorMessage,
         saveCurrentExplanation,

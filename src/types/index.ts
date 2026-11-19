@@ -20,7 +20,8 @@ export type PageView =
   | 'ai-concepts'
   | '3d-lab'
   | 'study-library'
-  | 'profile-settings';
+  | 'profile-settings'
+  | 'analytics-studio';
 
 // AI Tutor Types
 export type ExplanationDifficulty = 'Beginner' | 'Intermediate' | 'Advanced';
@@ -35,6 +36,7 @@ export interface ExplanationResult {
   introduction: string;
   analogy: string;
   coreMechanics: string[];
+  importantConcepts?: string[];
   practicalExample?: string;
   codeOrFormula?: string;
   commonMisconceptions: string[];
@@ -50,6 +52,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   timestamp: string;
+  isError?: boolean;
 }
 
 // Quiz Types

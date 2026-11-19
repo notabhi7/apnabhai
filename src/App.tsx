@@ -19,6 +19,7 @@ import { ThreeDLabView } from './components/views/ThreeDLabView';
 import { StudyLibraryView } from './components/views/StudyLibraryView';
 import { ProfileSettingsView } from './components/views/ProfileSettingsView';
 import { GeminiChatbotDrawer } from './components/chat/GeminiChatbotDrawer';
+import GlassyDashboardDemo from '@/components/ui/glassy-dashboard-demo';
 
 const MainWorkspace: React.FC = () => {
   const { activePage, setActivePage } = useStudy();
@@ -55,10 +56,14 @@ const MainWorkspace: React.FC = () => {
         return <StudyLibraryView />;
       case 'profile-settings':
         return <ProfileSettingsView />;
+      case 'analytics-studio':
+        return <GlassyDashboardDemo />;
       default:
         return <DashboardView />;
     }
   };
+
+  const isFullWidth = activePage === 'analytics-studio';
 
   return (
     <div className="min-h-screen flex flex-col bg-white dark:bg-slate-950 text-zinc-950 dark:text-slate-100 transition-colors selection:bg-blue-600 selection:text-white">
@@ -66,7 +71,13 @@ const MainWorkspace: React.FC = () => {
       <Navbar onOpenAuth={() => setIsAuthOpen(true)} />
 
       {/* Main Workspace Body */}
-      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8">
+      <main
+        className={
+          isFullWidth
+            ? 'flex-1 w-full overflow-x-clip'
+            : 'flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8'
+        }
+      >
         {renderActiveView()}
       </main>
 
