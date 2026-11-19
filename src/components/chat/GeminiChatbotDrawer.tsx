@@ -42,7 +42,7 @@ export const GeminiChatbotDrawer: React.FC = () => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // Model & Persona State
-  const [selectedModel, setSelectedModel] = useState<ChatbotModelId>('gemini-4-hydrogen');
+  const [selectedModel, setSelectedModel] = useState<ChatbotModelId>('gemini-3.1-flash-lite');
   const [selectedPersona, setSelectedPersona] = useState<'socratic' | 'drillmaster' | 'eli5' | 'architect'>('socratic');
 
   const [messages, setMessages] = useState<Message[]>(() => {
@@ -57,7 +57,7 @@ export const GeminiChatbotDrawer: React.FC = () => {
         id: 'msg-init-1',
         role: 'model',
         text: "Namaste! I'm your **ApnaBhai Gemini AI Study Companion**. How can I help you conquer difficult concepts today? Pick a coach persona or ask me anything!",
-        model: 'gemini-4-hydrogen',
+        model: 'gemini-3.1-flash-lite',
         timestamp: 'Just now'
       }
     ];

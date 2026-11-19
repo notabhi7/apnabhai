@@ -42,6 +42,9 @@ interface StudyContextType {
   tutorChatHistory: ChatMessage[];
   isExplaining: boolean;
   isChatting: boolean;
+  explainError: string | null;
+  clearExplainError: () => void;
+  retryLastExplanation: () => Promise<ExplanationResult | null>;
   generateExplanation: (topic: string, difficulty: ExplanationDifficulty, style: ExplanationStyle, extraContext?: string) => Promise<ExplanationResult | null>;
   sendTutorMessage: (text: string) => Promise<void>;
   saveCurrentExplanation: () => void;
@@ -128,6 +131,13 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
   const [isExplaining, setIsExplaining] = useState(false);
   const [isChatting, setIsChatting] = useState(false);
+  const [explainError, setExplainError] = useState<string | null>(null);
+  const [lastExplainParams, setLastExplainParams] = useState<{
+    topic: string;
+    difficulty: ExplanationDifficulty;
+    style: ExplanationStyle;
+    extraContext?: string;
+  } | null>(null);
 
   // Quiz States
   const [currentQuiz, setCurrentQuiz] = useState<Quiz | null>(() => loadStorage('current_quiz', null));
@@ -258,6 +268,38 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }));
   };
 
+  async function postApiJson<T = any>(url: string, payload: unknown): Promise<T> {
+    let res: globalThis.Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    } catch (networkErr: any) {
+      throw new Error(networkErr?.message || 'Network error: unable to reach the server. Check your connection.');
+    }
+
+    const rawText = await res.text();
+    let data: any = null;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      if (!res.ok) {
+        throw new Error(`Server error (HTTP ${res.status}). Check that API routes are deployed and running.`);
+      }
+      throw new Error('Server returned an unexpected non-JSON response.');
+    }
+
+    if (!res.ok) {
+      throw new Error(data?.error || `Request failed with HTTP ${res.status}.`);
+    }
+
+    return data as T;
+  }
+
+  const clearExplainError = () => setExplainError(null);
+
   // 1. AI Tutor Actions
   const generateExplanation = async (
     topic: string,
@@ -265,18 +307,29 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     style: ExplanationStyle,
     extraContext?: string
   ): Promise<ExplanationResult | null> => {
+    const cleanTopic = topic.trim();
+    if (!cleanTopic || isExplaining) return null;
+
+    setLastExplainParams({ topic: cleanTopic, difficulty, style, extraContext });
+    setExplainError(null);
     setIsExplaining(true);
+
     try {
-      const res = await fetch('/api/ai/explain', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, difficulty, style, extraContext })
+      const data = await postApiJson<any>('/api/ai/explain', {
+        topic: cleanTopic,
+        difficulty,
+        style,
+        extraContext
       });
-      const data = await res.json();
+
+      if (!data?.introduction || !Array.isArray(data?.coreMechanics)) {
+        throw new Error('Received an incomplete explanation from Gemini. Please retry.');
+      }
+
       const result: ExplanationResult = {
         ...data,
         id: `exp-${Date.now()}`,
-        topic,
+        topic: cleanTopic,
         difficulty,
         style,
         createdAt: new Date().toISOString(),
@@ -287,44 +340,59 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         {
           id: `msg-${Date.now()}`,
           role: 'assistant',
-          text: `I've prepared a ${difficulty.toLowerCase()}-level explanation for **${topic}**. Feel free to ask me follow-up questions, request more analogies, or ask for code examples!`,
+          text: `I've prepared a ${difficulty.toLowerCase()}-level (${style}) explanation for **${cleanTopic}**. Feel free to ask follow-up questions, request more analogies, or explore formulas!`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
       setStudyStats(prev => ({ ...prev, topicsExplored: prev.topicsExplored + 1 }));
-      showToast(`Explanation generated for "${topic}"!`, 'success');
+      showToast(`Fresh explanation generated for "${cleanTopic}"!`, 'success');
       return result;
     } catch (e: any) {
-      console.error(e);
-      showToast('Failed to generate explanation. Using cached model.', 'error');
+      const message = e?.message || 'Failed to generate explanation from Gemini.';
+      console.error('Explanation generation failed:', message);
+      setExplainError(message);
+      showToast(message, 'error');
       return null;
     } finally {
       setIsExplaining(false);
     }
   };
 
+  const retryLastExplanation = async (): Promise<ExplanationResult | null> => {
+    if (!lastExplainParams) return null;
+    return generateExplanation(
+      lastExplainParams.topic,
+      lastExplainParams.difficulty,
+      lastExplainParams.style,
+      lastExplainParams.extraContext
+    );
+  };
+
   const sendTutorMessage = async (text: string) => {
-    if (!text.trim()) return;
+    const cleanText = text.trim();
+    if (!cleanText || isChatting) return;
+
     const userMsg: ChatMessage = {
       id: `usr-${Date.now()}`,
       role: 'user',
-      text: text.trim(),
+      text: cleanText,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-    setTutorChatHistory(prev => [...prev, userMsg]);
+    const nextHistory = [...tutorChatHistory, userMsg];
+    setTutorChatHistory(nextHistory);
     setIsChatting(true);
 
     try {
-      const res = await fetch('/api/ai/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          topic: currentExplanation?.topic || 'General Topic',
-          messages: [...tutorChatHistory, userMsg],
-          userMessage: text.trim()
-        })
+      const data = await postApiJson<{ reply: string }>('/api/ai/chat', {
+        topic: currentExplanation?.topic || 'General Topic',
+        messages: nextHistory,
+        userMessage: cleanText
       });
-      const data = await res.json();
+
+      if (!data?.reply) {
+        throw new Error('Tutor returned an empty reply.');
+      }
+
       const botMsg: ChatMessage = {
         id: `bot-${Date.now()}`,
         role: 'assistant',
@@ -332,15 +400,17 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       setTutorChatHistory(prev => [...prev, botMsg]);
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      const message = e?.message || 'Unable to get a follow-up answer right now.';
+      console.error('Tutor follow-up chat failed:', message);
+      showToast(message, 'error');
       setTutorChatHistory(prev => [
         ...prev,
         {
           id: `bot-${Date.now()}`,
           role: 'assistant',
-          text: 'I encountered a temporary connection issue. Consider how this concept fits into the broader system architecture.',
-          timestamp: 'Just now'
+          text: `Error: ${message}`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
     } finally {
@@ -361,17 +431,18 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     count: number = 5,
     types: string[] = ['mcq', 'tf', 'short']
   ): Promise<Quiz | null> => {
+    if (!topic.trim() || isGeneratingQuiz) return null;
     setIsGeneratingQuiz(true);
     try {
-      const res = await fetch('/api/ai/quiz', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, difficulty, questionCount: count, questionTypes: types })
+      const data = await postApiJson<any>('/api/ai/quiz', {
+        topic: topic.trim(),
+        difficulty,
+        questionCount: count,
+        questionTypes: types
       });
-      const data = await res.json();
       const newQuiz: Quiz = {
         id: `quiz-${Date.now()}`,
-        topic,
+        topic: topic.trim(),
         difficulty,
         questions: data.questions || [],
         createdAt: new Date().toISOString(),
@@ -380,9 +451,9 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setCurrentQuiz(newQuiz);
       showToast(`Quiz with ${newQuiz.questions.length} questions ready!`, 'success');
       return newQuiz;
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      showToast('Error generating quiz', 'error');
+      showToast(e?.message || 'Error generating quiz', 'error');
       return null;
     } finally {
       setIsGeneratingQuiz(false);
@@ -453,18 +524,18 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     detailLevel: string = 'Comprehensive',
     subject: string = 'Computer Science & AI'
   ): Promise<RevisionNote | null> => {
+    if (!topic.trim() || isGeneratingNotes) return null;
     setIsGeneratingNotes(true);
     try {
-      const res = await fetch('/api/ai/notes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, detailLevel, subject })
+      const data = await postApiJson<any>('/api/ai/notes', {
+        topic: topic.trim(),
+        detailLevel,
+        subject
       });
-      const data = await res.json();
       const newNote: RevisionNote = {
         ...data,
         id: `note-${Date.now()}`,
-        topic,
+        topic: topic.trim(),
         subject,
         detailLevel,
         createdAt: new Date().toISOString(),
@@ -489,9 +560,9 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       return newNote;
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      showToast('Failed generating revision notes', 'error');
+      showToast(e?.message || 'Failed generating revision notes', 'error');
       return null;
     } finally {
       setIsGeneratingNotes(false);
@@ -570,18 +641,18 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     count: number = 6,
     difficulty: ExplanationDifficulty = 'Intermediate'
   ): Promise<FlashcardDeck | null> => {
+    if (!topic.trim() || isGeneratingFlashcards) return null;
     setIsGeneratingFlashcards(true);
     try {
-      const res = await fetch('/api/ai/flashcards', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, count, difficulty })
+      const data = await postApiJson<any>('/api/ai/flashcards', {
+        topic: topic.trim(),
+        count,
+        difficulty
       });
-      const data = await res.json();
       const rawCards = data.flashcards || [];
       const newDeck: FlashcardDeck = {
         id: `deck-${Date.now()}`,
-        topic,
+        topic: topic.trim(),
         createdAt: new Date().toISOString(),
         saved: true,
         cards: rawCards.map((c: any, i: number) => ({
@@ -610,9 +681,9 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       return newDeck;
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      showToast('Error generating flashcards', 'error');
+      showToast(e?.message || 'Error generating flashcards', 'error');
       return null;
     } finally {
       setIsGeneratingFlashcards(false);
@@ -730,6 +801,9 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         tutorChatHistory,
         isExplaining,
         isChatting,
+        explainError,
+        clearExplainError,
+        retryLastExplanation,
         generateExplanation,
         sendTutorMessage,
         saveCurrentExplanation,

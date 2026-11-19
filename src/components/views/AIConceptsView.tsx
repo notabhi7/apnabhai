@@ -37,6 +37,7 @@ export const AIConceptsView: React.FC = () => {
   };
 
   const handleRunPlayground = async () => {
+    if (isRunningTest) return;
     setIsRunningTest(true);
     setPlaygroundOutput(null);
     try {
@@ -53,10 +54,15 @@ export const AIConceptsView: React.FC = () => {
         })
       });
       const data = await res.json();
-      setPlaygroundOutput(data.output || activeLesson.interactivePrompt.sampleOutput);
+      if (!res.ok) {
+        throw new Error(data?.error || `Request failed (${res.status})`);
+      }
+      setPlaygroundOutput(data.output || '');
       showToast('Sandbox executed!', 'success');
-    } catch (e) {
-      setPlaygroundOutput(activeLesson.interactivePrompt.sampleOutput);
+    } catch (e: any) {
+      const msg = e?.message || 'Failed to execute sandbox request.';
+      setPlaygroundOutput(`Error: ${msg}`);
+      showToast(msg, 'error');
     } finally {
       setIsRunningTest(false);
     }

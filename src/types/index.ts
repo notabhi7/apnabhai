@@ -35,9 +35,11 @@ export interface ExplanationResult {
   introduction: string;
   analogy: string;
   coreMechanics: string[];
+  practicalExample?: string;
   codeOrFormula?: string;
   commonMisconceptions: string[];
   summary: string;
+  modelUsed?: string;
   createdAt: string;
   saved?: boolean;
   disclaimer: string;
