@@ -1,20 +1,14 @@
 import React, { useState } from 'react';
 import {
-  Sparkles,
-  BookOpen,
-  HelpCircle,
-  Layers,
-  Brain,
-  Library,
   Sun,
   Moon,
   User as UserIcon,
   Menu,
   X,
-  LayoutDashboard,
   LogOut,
   ChevronDown,
-  ShieldAlert
+  Library,
+  LayoutDashboard
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -32,14 +26,15 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
-  const navLinks: { id: PageView; label: string; icon: any }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'ai-tutor', label: 'AI Tutor', icon: Brain },
-    { id: 'quiz-generator', label: 'Quizzes', icon: HelpCircle },
-    { id: 'revision-notes', label: 'Revision Notes', icon: BookOpen },
-    { id: 'flashcards', label: 'Flashcards', icon: Layers },
-    { id: 'ai-concepts', label: 'AI Concepts', icon: Sparkles },
-    { id: 'study-library', label: 'Library', icon: Library },
+  const navLinks: { id: PageView; label: string }[] = [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'ai-tutor', label: 'AI Tutor' },
+    { id: 'quiz-generator', label: 'Quizzes' },
+    { id: 'revision-notes', label: 'Notes' },
+    { id: 'flashcards', label: 'Flashcards' },
+    { id: 'ai-concepts', label: 'AI Concepts' },
+    { id: '3d-lab', label: '3D Lab' },
+    { id: 'study-library', label: 'Library' },
   ];
 
   const handleNavClick = (page: PageView) => {
@@ -48,93 +43,98 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth }) => {
   };
 
   return (
-    <header className="sticky top-0 z-40 border-b backdrop-blur-md transition-colors bg-white/90 dark:bg-slate-950/85 border-slate-200 dark:border-slate-800">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-        {/* Brand Logo */}
-        <div
-          onClick={() => setActivePage('dashboard')}
-          className="flex items-center gap-3 cursor-pointer group select-none"
+    <header className="sticky top-0 z-40 border-b backdrop-blur-md transition-colors bg-white/95 dark:bg-slate-950/90 border-zinc-100 dark:border-slate-800">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-6">
+        {/* Zone 1: Brand Logo */}
+        <button
+          onClick={() => setActivePage('landing')}
+          className="flex items-center gap-2.5 cursor-pointer group select-none shrink-0"
         >
-          <div className="w-9 h-9 rounded-xl overflow-hidden bg-gradient-to-tr from-blue-600 to-indigo-600 p-0.5 shadow-md shadow-indigo-500/20 group-hover:scale-105 transition-transform flex items-center justify-center">
+          <div className="w-8 h-8 rounded-xl overflow-hidden bg-zinc-950 dark:bg-white p-0.5 flex items-center justify-center transition-transform group-hover:scale-105">
             <img
               src="/assets/aistudio/image_e3bbf901.png"
-              alt="AI Study Buddy Logo"
+              alt="ApnaBhai Logo"
               className="w-full h-full object-contain"
             />
           </div>
-          <div>
-            <span className="font-extrabold text-base sm:text-lg tracking-tight bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 dark:from-blue-400 dark:via-indigo-300 dark:to-violet-400 bg-clip-text text-transparent">
-              AI Study Buddy
-            </span>
-          </div>
-        </div>
+          <span className="font-extrabold text-lg tracking-tight text-zinc-950 dark:text-white whitespace-nowrap">
+            ApnaBhai
+          </span>
+        </button>
 
-        {/* Desktop Navigation Links */}
-        <nav className="hidden lg:flex items-center gap-1">
+        {/* Zone 2: Minimalist Clean Typography Navigation */}
+        <nav className="hidden lg:flex items-center gap-5">
           {navLinks.map(link => {
-            const Icon = link.icon;
             const isActive = activePage === link.id;
             return (
               <button
                 key={link.id}
                 onClick={() => handleNavClick(link.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                className={`text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer py-1 border-b-2 ${
                   isActive
-                    ? 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800/80 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-850'
+                    ? 'text-zinc-950 dark:text-white border-zinc-950 dark:border-white'
+                    : 'text-zinc-500 dark:text-slate-400 border-transparent hover:text-zinc-950 dark:hover:text-white'
                 }`}
               >
-                <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`} />
-                <span>{link.label}</span>
+                {link.label}
               </button>
             );
           })}
         </nav>
 
-        {/* Right Action Icons & User Dropdown */}
-        <div className="flex items-center gap-2.5">
-          {/* Theme Toggle */}
+        {/* Zone 3: Right Actions */}
+        <div className="flex items-center gap-2.5 shrink-0">
           <button
             onClick={toggleTheme}
-            className="p-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+            className="p-2 rounded-xl text-zinc-500 dark:text-slate-400 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-slate-800 transition cursor-pointer"
             title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             aria-label="Toggle theme"
           >
-            {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-indigo-600" />}
+            {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-zinc-700" />}
           </button>
 
-          {/* User Account / Profile button */}
           {isAuthenticated && user ? (
             <div className="relative">
               <button
                 onClick={() => setUserMenuOpen(!userMenuOpen)}
-                className="flex items-center gap-2 p-1.5 pr-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                className="flex items-center gap-2 py-1.5 px-2.5 rounded-xl bg-zinc-100/80 dark:bg-slate-900 hover:bg-zinc-200/70 dark:hover:bg-slate-800 transition cursor-pointer"
               >
                 <img
-                  src={user.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80'}
+                  src={user.avatarUrl || '/assets/aistudio/image_e3bbf901.png'}
                   alt={user.name}
-                  className="w-7 h-7 rounded-lg object-cover ring-1 ring-blue-500/30"
+                  referrerPolicy="no-referrer"
+                  className="w-6 h-6 rounded-lg object-cover"
                 />
-                <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 hidden sm:inline max-w-[100px] truncate">
+                <span className="text-xs font-semibold text-zinc-900 dark:text-slate-200 hidden sm:inline max-w-[100px] truncate">
                   {user.name}
                 </span>
-                <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                <ChevronDown className="w-3.5 h-3.5 text-zinc-500" />
               </button>
 
               {userMenuOpen && (
-                <div className="absolute right-0 mt-2 w-52 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-2 shadow-xl z-50 animate-in fade-in zoom-in-95">
-                  <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800">
-                    <div className="text-xs font-bold text-slate-900 dark:text-white truncate">{user.name}</div>
-                    <div className="text-[11px] text-slate-500 truncate">{user.email}</div>
+                <div className="absolute right-0 mt-2 w-52 rounded-2xl bg-white dark:bg-slate-900 border border-zinc-200/80 dark:border-slate-800 p-2 shadow-xl z-50 animate-in fade-in zoom-in-95">
+                  <div className="px-3 py-2 border-b border-zinc-100 dark:border-slate-800">
+                    <div className="text-xs font-bold text-zinc-950 dark:text-white truncate">{user.name}</div>
+                    <div className="text-[11px] text-zinc-500 truncate">{user.email}</div>
                   </div>
 
                   <div className="py-1">
                     <button
                       onClick={() => {
+                        setActivePage('dashboard');
+                        setUserMenuOpen(false);
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-xs text-zinc-700 dark:text-slate-300 hover:bg-zinc-100 dark:hover:bg-slate-800 rounded-lg flex items-center gap-2 cursor-pointer"
+                    >
+                      <LayoutDashboard className="w-3.5 h-3.5" />
+                      <span>Workspace Dashboard</span>
+                    </button>
+                    <button
+                      onClick={() => {
                         setActivePage('profile-settings');
                         setUserMenuOpen(false);
                       }}
-                      className="w-full px-3 py-1.5 text-left text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg flex items-center gap-2"
+                      className="w-full px-3 py-1.5 text-left text-xs text-zinc-700 dark:text-slate-300 hover:bg-zinc-100 dark:hover:bg-slate-800 rounded-lg flex items-center gap-2 cursor-pointer"
                     >
                       <UserIcon className="w-3.5 h-3.5" />
                       <span>Profile & Settings</span>
@@ -144,30 +144,20 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth }) => {
                         setActivePage('study-library');
                         setUserMenuOpen(false);
                       }}
-                      className="w-full px-3 py-1.5 text-left text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg flex items-center gap-2"
+                      className="w-full px-3 py-1.5 text-left text-xs text-zinc-700 dark:text-slate-300 hover:bg-zinc-100 dark:hover:bg-slate-800 rounded-lg flex items-center gap-2 cursor-pointer"
                     >
                       <Library className="w-3.5 h-3.5" />
                       <span>Saved Library</span>
                     </button>
-                    <button
-                      onClick={() => {
-                        setActivePage('landing');
-                        setUserMenuOpen(false);
-                      }}
-                      className="w-full px-3 py-1.5 text-left text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg flex items-center gap-2"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-                      <span>Product Tour (Landing)</span>
-                    </button>
                   </div>
 
-                  <div className="pt-1 border-t border-slate-100 dark:border-slate-800">
+                  <div className="pt-1 border-t border-zinc-100 dark:border-slate-800">
                     <button
                       onClick={() => {
                         logout();
                         setUserMenuOpen(false);
                       }}
-                      className="w-full px-3 py-1.5 text-left text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg flex items-center gap-2"
+                      className="w-full px-3 py-1.5 text-left text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg flex items-center gap-2 cursor-pointer"
                     >
                       <LogOut className="w-3.5 h-3.5" />
                       <span>Log Out</span>
@@ -179,7 +169,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth }) => {
           ) : (
             <button
               onClick={onOpenAuth}
-              className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow-sm transition"
+              className="px-4 py-2 rounded-xl text-xs font-bold bg-zinc-950 hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200 text-white transition whitespace-nowrap shrink-0 cursor-pointer"
             >
               Sign In
             </button>
@@ -188,7 +178,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth }) => {
           {/* Mobile menu hamburger */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="p-2 rounded-xl text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 lg:hidden"
+            className="p-2 rounded-xl text-zinc-700 dark:text-slate-400 hover:bg-zinc-100 dark:hover:bg-slate-800 lg:hidden cursor-pointer"
             aria-label="Toggle navigation menu"
           >
             {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -198,22 +188,20 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenAuth }) => {
 
       {/* Mobile Menu Dropdown */}
       {mobileMenuOpen && (
-        <div className="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-4 py-3 space-y-1">
+        <div className="lg:hidden border-t border-zinc-100 dark:border-slate-800 bg-white dark:bg-slate-950 px-4 py-3 space-y-1">
           {navLinks.map(link => {
-            const Icon = link.icon;
             const isActive = activePage === link.id;
             return (
               <button
                 key={link.id}
                 onClick={() => handleNavClick(link.id)}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold ${
+                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold cursor-pointer ${
                   isActive
-                    ? 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-850'
+                    ? 'bg-zinc-950 text-white dark:bg-white dark:text-zinc-950'
+                    : 'text-zinc-700 dark:text-slate-300 hover:bg-zinc-100 dark:hover:bg-slate-800'
                 }`}
               >
-                <Icon className="w-4 h-4" />
-                <span>{link.label}</span>
+                {link.label}
               </button>
             );
           })}

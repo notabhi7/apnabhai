@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -17,7 +17,6 @@ const isProd = process.env.NODE_ENV === 'production';
 app.use(express.json({ limit: '10mb' }));
 
 // Initialize GoogleGenAI client server-side with telemetry header
-const apiKey = process.env.GEMINI_API_KEY;
 let ai: GoogleGenAI | null = null;
 
 function getAIClient(): GoogleGenAI | null {
@@ -32,6 +31,28 @@ function getAIClient(): GoogleGenAI | null {
     });
   }
   return ai;
+}
+
+async function generateWithRetry(
+  client: GoogleGenAI,
+  params: Parameters<GoogleGenAI['models']['generateContent']>[0],
+  maxRetries = 2
+) {
+  let lastError: any;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await client.models.generateContent(params);
+    } catch (err: any) {
+      lastError = err;
+      const status = err?.status || err?.code;
+      const isTransient = status === 429 || status === 503 || status === 500 || err?.message?.includes('UNAVAILABLE');
+      if (!isTransient || attempt === maxRetries) {
+        throw err;
+      }
+      await new Promise(resolve => setTimeout(resolve, 600 * Math.pow(2, attempt)));
+    }
+  }
+  throw lastError;
 }
 
 // 1. API: AI Tutor - Topic Explanation
@@ -90,8 +111,8 @@ Respond STRICTLY in valid JSON matching this schema:
   "disclaimer": "AI-generated educational explanation. Please verify critical facts and exam-specific details with primary textbooks and verified course materials."
 }`;
 
-    const response = await client.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const response = await generateWithRetry(client, {
+      model: 'gemini-4-hydrogen',
       contents: prompt,
       config: { responseMimeType: 'application/json' },
     });
@@ -124,31 +145,33 @@ Respond STRICTLY in valid JSON matching this schema:
   }
 });
 
-// 2. API: AI Tutor Follow-up Chat
+// 2A. API: AI Tutor Follow-up Chat
 app.post('/api/ai/chat', async (req: Request, res: Response) => {
   try {
     const { topic, messages = [], userMessage } = req.body;
     const client = getAIClient();
 
     if (!client) {
-      res.json({
-        reply: `Great question regarding **${topic || 'this concept'}**! In practice, this connects directly to how inputs are partitioned and processed. A helpful way to verify your understanding is to trace a minimal edge case step-by-step. Would you like to see a concrete example or test this with a quiz question?`,
-        disclaimer: 'AI-generated tutor reply. Verify critical answers against certified references.'
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured. Please check Settings > Secrets to configure your API key.'
       });
       return;
     }
 
-    const conversationHistory = messages.map((m: any) => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${m.text}`).join('\n');
-    const prompt = `You are AI Study Buddy's personalized tutor.
-Topic being studied: "${topic}".
+    const conversationHistory = messages
+      .map((m: any) => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${m.text}`)
+      .join('\n');
+
+    const prompt = `You are ApnaBhai's personalized academic tutor.
+Topic being studied: "${topic || 'General Studies'}".
 Conversation so far:
 ${conversationHistory}
 Student asks: "${userMessage}"
 
-Provide a clear, supportive, instructive, and academically precise answer. Keep it within 3 short paragraphs. Include a code or formula example if relevant.`;
+Provide a clear, supportive, instructive, and academically precise answer within 3 short paragraphs. Include a concrete example or formula if relevant.`;
 
-    const response = await client.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const response = await generateWithRetry(client, {
+      model: 'gemini-4-hydrogen',
       contents: prompt,
     });
 
@@ -157,13 +180,155 @@ Provide a clear, supportive, instructive, and academically precise answer. Keep 
       disclaimer: 'AI-generated tutor reply. Verify critical answers against certified references.'
     });
   } catch (err: any) {
-    console.warn('Chat endpoint fallback:', err?.message || err);
-    res.json({
-      reply: `That is an insightful question. When analyzing this aspect, focus on the distinction between the theoretical definition and practical execution boundaries. Reviewing the core formulas will help solidify the concept.`,
-      disclaimer: 'AI-generated tutor reply. Verify critical answers against certified references.'
+    console.error('Tutor chat endpoint error:', err?.message || err);
+    res.status(500).json({
+      error: err?.message || 'Unable to generate tutor response right now. Please try again.'
     });
   }
 });
+
+// 2B. API: Dedicated Multi-turn Gemini Chatbot with Persona & Model Routing
+const PERSONA_PROMPTS: Record<string, string> = {
+  socratic: `You are ApnaBhai's Socratic Study Coach. You guide students using inquiry, hints, and active recall. Never dump raw solutions without encouraging the student to think through the step first. Keep tone supportive, insightful, and academically sharp.`,
+  drillmaster: `You are ApnaBhai's Exam Drillmaster. Your objective is rigorous exam readiness. Challenge the student with high-yield concepts, verify precision, test edge cases, and ensure no conceptual flaws remain. Be brisk, clear, and high-impact.`,
+  eli5: `You are ApnaBhai's Concept Simplifier (ELI5). Make difficult academic & computer science concepts strikingly intuitive through down-to-earth analogies, visual metaphors, and plain language. End with a 1-sentence mnemonic or takeaway.`,
+  architect: `You are ApnaBhai's Senior Code & Engineering Architect. Provide structured algorithmic explanations, clean code examples with comments, time/space complexity O(...) analysis, and real-world system architecture tradeoffs.`
+};
+
+function resolveChatbotModelConfig(requestedModel: string): {
+  model: string;
+  displayLabel: string;
+  thinkingLevel?: ThinkingLevel;
+} {
+  switch (requestedModel) {
+    case 'gemini-3.1-flash-lite':
+      return { model: 'gemini-3.1-flash-lite', displayLabel: 'gemini-3.1-flash-lite' };
+    case 'gemini-4-hydrogen-deep':
+    case 'gemini-4-carbon':
+    case 'gemini-4-argon':
+      return {
+        model: 'gemini-4-hydrogen',
+        displayLabel: 'gemini-4-hydrogen (Deep)',
+        thinkingLevel: ThinkingLevel.HIGH,
+      };
+    case 'gemini-4-hydrogen-fast':
+      return {
+        model: 'gemini-4-hydrogen',
+        displayLabel: 'gemini-4-hydrogen (Fast)',
+        thinkingLevel: ThinkingLevel.LOW,
+      };
+    case 'gemini-4-hydrogen':
+    case 'gemini-3.8-flash':
+    default:
+      return {
+        model: 'gemini-4-hydrogen',
+        displayLabel: 'gemini-4-hydrogen',
+        thinkingLevel: ThinkingLevel.MEDIUM,
+      };
+  }
+}
+
+app.post('/api/ai/chatbot', async (req: Request, res: Response) => {
+  try {
+    const {
+      messages = [],
+      role = 'socratic',
+      model = 'gemini-4-hydrogen'
+    } = req.body;
+
+    const systemInstruction = PERSONA_PROMPTS[role] || PERSONA_PROMPTS.socratic;
+    const resolved = resolveChatbotModelConfig(model);
+
+    const client = getAIClient();
+    if (!client) {
+      res.status(503).json({
+        error: 'Gemini API key is not configured. Please add GEMINI_API_KEY in Settings > Secrets.'
+      });
+      return;
+    }
+
+    // Normalize messages: Gemini multi-turn contents must start with 'user' and strictly alternate user/model
+    const rawContents: Array<{ role: 'user' | 'model'; text: string }> = [];
+    for (const msg of messages) {
+      const text = typeof msg?.text === 'string' ? msg.text.trim() : '';
+      if (!text) continue;
+      const msgRole: 'user' | 'model' = msg.role === 'user' ? 'user' : 'model';
+      if (rawContents.length === 0 && msgRole !== 'user') {
+        // Skip leading assistant welcome message so conversation always starts with a user turn
+        continue;
+      }
+      const prev = rawContents[rawContents.length - 1];
+      if (prev && prev.role === msgRole) {
+        prev.text = `${prev.text}\n\n${text}`;
+      } else {
+        rawContents.push({ role: msgRole, text });
+      }
+    }
+
+    if (rawContents.length === 0) {
+      res.status(400).json({ error: 'Please enter a message to start the conversation.' });
+      return;
+    }
+
+    const contents = rawContents.map(item => ({
+      role: item.role,
+      parts: [{ text: item.text }],
+    }));
+
+    const config: any = {
+      systemInstruction,
+    };
+    if (resolved.thinkingLevel) {
+      config.thinkingConfig = { thinkingLevel: resolved.thinkingLevel };
+    }
+
+    let replyText = '';
+    let usedModel = resolved.displayLabel;
+
+    try {
+      const response = await generateWithRetry(client, {
+        model: resolved.model,
+        contents,
+        config,
+      });
+      replyText = response.text || '';
+    } catch (modelErr: any) {
+      console.warn(`Primary model ${resolved.model} failed, trying gemini-4-hydrogen fallback:`, modelErr?.message || modelErr);
+      if (resolved.model !== 'gemini-4-hydrogen' || resolved.thinkingLevel) {
+        usedModel = 'gemini-4-hydrogen';
+        const fallbackResp = await generateWithRetry(client, {
+          model: 'gemini-4-hydrogen',
+          contents,
+          config: { systemInstruction },
+        });
+        replyText = fallbackResp.text || '';
+      } else {
+        throw modelErr;
+      }
+    }
+
+    res.json({
+      reply: replyText || 'I am ready to help you study. What concept would you like to explore?',
+      model: usedModel,
+      role,
+      disclaimer: 'AI-generated study guidance. Verify critical formulas with primary academic sources.'
+    });
+  } catch (err: any) {
+    console.error('Chatbot endpoint error:', err);
+    const status = err?.status || err?.code;
+    const rawMsg = err?.message || 'Unable to generate a response right now.';
+    if (status === 403 || status === 400 && rawMsg.toLowerCase().includes('api key')) {
+      res.status(403).json({ error: 'Invalid or unauthorized Gemini API key. Please check Settings > Secrets.' });
+      return;
+    }
+    if (status === 429) {
+      res.status(429).json({ error: 'Rate limit reached. Please wait a few seconds before sending another question.' });
+      return;
+    }
+    res.status(500).json({ error: rawMsg });
+  }
+});
+
 
 // 3. API: Quiz Generator (MCQs, True/False, Short Answer)
 app.post('/api/ai/quiz', async (req: Request, res: Response) => {
@@ -259,8 +424,8 @@ Return strictly valid JSON in this structure:
   "disclaimer": "AI-generated quiz questions. Always check critical grading criteria against your syllabus."
 }`;
 
-    const response = await client.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const response = await generateWithRetry(client, {
+      model: 'gemini-4-hydrogen',
       contents: prompt,
       config: { responseMimeType: 'application/json' },
     });
@@ -375,8 +540,8 @@ Format STRICTLY as valid JSON matching this schema:
   "disclaimer": "AI-generated study notes. Important formulas, dates, and historical definitions should be verified against official course syllabi."
 }`;
 
-    const response = await client.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const response = await generateWithRetry(client, {
+      model: 'gemini-4-hydrogen',
       contents: prompt,
       config: { responseMimeType: 'application/json' },
     });
@@ -482,8 +647,8 @@ Return strictly valid JSON:
   "disclaimer": "AI-generated active recall flashcards. Verify critical terms with trusted references."
 }`;
 
-    const response = await client.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const response = await generateWithRetry(client, {
+      model: 'gemini-4-hydrogen',
       contents: prompt,
       config: { responseMimeType: 'application/json' },
     });
@@ -553,8 +718,8 @@ Return strictly JSON:
   "analysis": "Educational commentary on how this demonstrates the AI concept"
 }`;
 
-    const response = await client.models.generateContent({
-      model: 'gemini-3.8-flash',
+    const response = await generateWithRetry(client, {
+      model: 'gemini-4-hydrogen',
       contents: prompt,
       config: { responseMimeType: 'application/json' },
     });

@@ -1,6 +1,17 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import {
+  collection,
+  doc,
+  getDocs,
+  setDoc,
+  deleteDoc,
+  query,
+  where
+} from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { useAuth } from './AuthContext';
+import {
   PageView,
   ExplanationResult,
   ExplanationDifficulty,
@@ -98,7 +109,8 @@ function saveStorage<T>(key: string, value: T) {
 }
 
 export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [activePage, setActivePage] = useState<PageView>('dashboard');
+  const { firebaseUser, user } = useAuth();
+  const [activePage, setActivePage] = useState<PageView>('landing');
 
   // AI Tutor States
   const [currentExplanation, setCurrentExplanation] = useState<ExplanationResult | null>(() =>
@@ -159,6 +171,74 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { saveStorage('current_deck', currentDeck); }, [currentDeck]);
   useEffect(() => { saveStorage('study_stats', studyStats); }, [studyStats]);
 
+  // Sync with Firestore when user is authenticated
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const uid = firebaseUser.uid;
+
+    const loadCloudData = async () => {
+      try {
+        // Load Notes
+        const notesQuery = query(collection(db, 'notes'), where('userId', '==', uid));
+        const notesSnap = await getDocs(notesQuery);
+        if (!notesSnap.empty) {
+          const cloudNotes: RevisionNote[] = [];
+          notesSnap.forEach(d => cloudNotes.push(d.data() as RevisionNote));
+          setSavedNotes(prev => {
+            const map = new Map<string, RevisionNote>();
+            prev.forEach(n => map.set(n.id, n));
+            cloudNotes.forEach(n => map.set(n.id, n));
+            return Array.from(map.values());
+          });
+        }
+
+        // Load Quizzes
+        const quizzesQuery = query(collection(db, 'quizzes'), where('userId', '==', uid));
+        const quizzesSnap = await getDocs(quizzesQuery);
+        if (!quizzesSnap.empty) {
+          quizzesSnap.forEach(d => {
+            const q = d.data() as Quiz;
+            setCurrentQuiz(prev => (prev?.id === q.id ? prev : q));
+          });
+        }
+
+        // Load Quiz Attempts
+        const attemptsQuery = query(collection(db, 'quiz_attempts'), where('userId', '==', uid));
+        const attemptsSnap = await getDocs(attemptsQuery);
+        if (!attemptsSnap.empty) {
+          const cloudAttempts: QuizAttempt[] = [];
+          attemptsSnap.forEach(d => cloudAttempts.push(d.data() as QuizAttempt));
+          setQuizAttempts(prev => {
+            const map = new Map<string, QuizAttempt>();
+            prev.forEach(a => map.set(a.id, a));
+            cloudAttempts.forEach(a => map.set(a.id, a));
+            return Array.from(map.values()).sort(
+              (a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()
+            );
+          });
+        }
+
+        // Load Flashcard Decks
+        const decksQuery = query(collection(db, 'flashcard_decks'), where('userId', '==', uid));
+        const decksSnap = await getDocs(decksQuery);
+        if (!decksSnap.empty) {
+          const cloudDecks: FlashcardDeck[] = [];
+          decksSnap.forEach(d => cloudDecks.push(d.data() as FlashcardDeck));
+          setSavedDecks(prev => {
+            const map = new Map<string, FlashcardDeck>();
+            prev.forEach(d => map.set(d.id, d));
+            cloudDecks.forEach(d => map.set(d.id, d));
+            return Array.from(map.values());
+          });
+        }
+      } catch (err) {
+        handleFirestoreError(err, OperationType.LIST, 'user_collections');
+      }
+    };
+
+    loadCloudData();
+  }, [firebaseUser]);
+
   const showToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     const id = `toast-${Date.now()}`;
     setToasts(prev => [...prev, { id, type, message }]);
@@ -216,7 +296,7 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return result;
     } catch (e: any) {
       console.error(e);
-      showToast('Failed to generate explanation. Using cached educational model.', 'error');
+      showToast('Failed to generate explanation. Using cached model.', 'error');
       return null;
     } finally {
       setIsExplaining(false);
@@ -309,7 +389,7 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const recordQuizAttempt = (attemptData: Omit<QuizAttempt, 'id' | 'completedAt'>) => {
+  const recordQuizAttempt = async (attemptData: Omit<QuizAttempt, 'id' | 'completedAt'>) => {
     const newAttempt: QuizAttempt = {
       ...attemptData,
       id: `attempt-${Date.now()}`,
@@ -333,12 +413,38 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       confetti({ particleCount: 70, spread: 65, origin: { y: 0.6 } });
     }
     showToast(`Scored ${newAttempt.percentage}% (${newAttempt.score}/${newAttempt.totalPoints} pts)!`, 'success');
+
+    // Sync to Firestore if signed in
+    if (firebaseUser) {
+      try {
+        const docRef = doc(db, 'quiz_attempts', newAttempt.id);
+        await setDoc(docRef, {
+          ...newAttempt,
+          userId: firebaseUser.uid
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `quiz_attempts/${newAttempt.id}`);
+      }
+    }
   };
 
-  const saveCurrentQuiz = () => {
+  const saveCurrentQuiz = async () => {
     if (!currentQuiz) return;
     setCurrentQuiz(prev => (prev ? { ...prev, saved: true } : null));
     showToast('Quiz saved to Study Library!', 'success');
+
+    if (firebaseUser) {
+      try {
+        const docRef = doc(db, 'quizzes', currentQuiz.id);
+        await setDoc(docRef, {
+          ...currentQuiz,
+          userId: firebaseUser.uid,
+          saved: true
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `quizzes/${currentQuiz.id}`);
+      }
+    }
   };
 
   // 3. Revision Notes Actions
@@ -368,6 +474,20 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setSavedNotes(prev => [newNote, ...prev]);
       setStudyStats(prev => ({ ...prev, notesCreated: prev.notesCreated + 1 }));
       showToast('Revision notes generated and saved to Library!', 'success');
+
+      // Sync to Firestore if authenticated
+      if (firebaseUser) {
+        try {
+          const docRef = doc(db, 'notes', newNote.id);
+          await setDoc(docRef, {
+            ...newNote,
+            userId: firebaseUser.uid
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.CREATE, `notes/${newNote.id}`);
+        }
+      }
+
       return newNote;
     } catch (e) {
       console.error(e);
@@ -378,7 +498,7 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const saveCurrentNote = () => {
+  const saveCurrentNote = async () => {
     if (!currentNote) return;
     setSavedNotes(prev => {
       const exists = prev.some(n => n.id === currentNote.id);
@@ -388,9 +508,21 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return [currentNote, ...prev];
     });
     showToast('Note saved to library!', 'success');
+
+    if (firebaseUser) {
+      try {
+        const docRef = doc(db, 'notes', currentNote.id);
+        await setDoc(docRef, {
+          ...currentNote,
+          userId: firebaseUser.uid
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `notes/${currentNote.id}`);
+      }
+    }
   };
 
-  const updateNote = (id: string, updates: Partial<RevisionNote>) => {
+  const updateNote = async (id: string, updates: Partial<RevisionNote>) => {
     setSavedNotes(prev =>
       prev.map(n => (n.id === id ? { ...n, ...updates, lastEditedAt: new Date().toISOString() } : n))
     );
@@ -398,12 +530,38 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setCurrentNote(prev => (prev ? { ...prev, ...updates } : null));
     }
     showToast('Note updated successfully', 'success');
+
+    if (firebaseUser) {
+      try {
+        const docRef = doc(db, 'notes', id);
+        await setDoc(
+          docRef,
+          {
+            ...updates,
+            lastEditedAt: new Date().toISOString(),
+            userId: firebaseUser.uid
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `notes/${id}`);
+      }
+    }
   };
 
-  const deleteNote = (id: string) => {
+  const deleteNote = async (id: string) => {
     setSavedNotes(prev => prev.filter(n => n.id !== id));
     if (currentNote?.id === id) setCurrentNote(null);
     showToast('Note removed from library', 'info');
+
+    if (firebaseUser) {
+      try {
+        const docRef = doc(db, 'notes', id);
+        await deleteDoc(docRef);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `notes/${id}`);
+      }
+    }
   };
 
   // 4. Flashcards Actions
@@ -438,6 +596,19 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setCurrentDeck(newDeck);
       setSavedDecks(prev => [newDeck, ...prev]);
       showToast(`Flashcard deck generated with ${newDeck.cards.length} cards!`, 'success');
+
+      if (firebaseUser) {
+        try {
+          const docRef = doc(db, 'flashcard_decks', newDeck.id);
+          await setDoc(docRef, {
+            ...newDeck,
+            userId: firebaseUser.uid
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.CREATE, `flashcard_decks/${newDeck.id}`);
+        }
+      }
+
       return newDeck;
     } catch (e) {
       console.error(e);
@@ -448,7 +619,7 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const saveCurrentDeck = () => {
+  const saveCurrentDeck = async () => {
     if (!currentDeck) return;
     setSavedDecks(prev => {
       const exists = prev.some(d => d.id === currentDeck.id);
@@ -458,17 +629,31 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return [currentDeck, ...prev];
     });
     showToast('Flashcard deck saved!', 'success');
+
+    if (firebaseUser) {
+      try {
+        const docRef = doc(db, 'flashcard_decks', currentDeck.id);
+        await setDoc(docRef, {
+          ...currentDeck,
+          userId: firebaseUser.uid
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `flashcard_decks/${currentDeck.id}`);
+      }
+    }
   };
 
-  const updateCardStatus = (deckId: string, cardId: string, status: 'known' | 'learning' | 'unreviewed') => {
+  const updateCardStatus = async (deckId: string, cardId: string, status: 'known' | 'learning' | 'unreviewed') => {
+    let updatedDeck: FlashcardDeck | null = null;
     const updater = (deck: FlashcardDeck) => {
       if (deck.id !== deckId) return deck;
-      return {
+      updatedDeck = {
         ...deck,
         cards: deck.cards.map(c =>
           c.id === cardId ? { ...c, status, lastReviewedAt: new Date().toISOString() } : c
         )
       };
+      return updatedDeck;
     };
 
     setSavedDecks(prev => prev.map(updater));
@@ -482,29 +667,58 @@ export const StudyProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         flashcardsMastered: prev.flashcardsMastered + 1
       }));
     }
+
+    if (firebaseUser && updatedDeck) {
+      try {
+        const docRef = doc(db, 'flashcard_decks', deckId);
+        await setDoc(docRef, { ...(updatedDeck as FlashcardDeck), userId: firebaseUser.uid }, { merge: true });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `flashcard_decks/${deckId}`);
+      }
+    }
   };
 
-  const deleteDeck = (deckId: string) => {
+  const deleteDeck = async (deckId: string) => {
     setSavedDecks(prev => prev.filter(d => d.id !== deckId));
     if (currentDeck?.id === deckId) setCurrentDeck(null);
     showToast('Deck deleted', 'info');
+
+    if (firebaseUser) {
+      try {
+        const docRef = doc(db, 'flashcard_decks', deckId);
+        await deleteDoc(docRef);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `flashcard_decks/${deckId}`);
+      }
+    }
   };
 
-  const addNewCardToDeck = (deckId: string, card: Omit<Flashcard, 'id' | 'status'>) => {
+  const addNewCardToDeck = async (deckId: string, card: Omit<Flashcard, 'id' | 'status'>) => {
     const newCard: Flashcard = {
       ...card,
       id: `card-${Date.now()}`,
       status: 'unreviewed'
     };
+    let updatedDeck: FlashcardDeck | null = null;
     const updater = (deck: FlashcardDeck) => {
       if (deck.id !== deckId) return deck;
-      return { ...deck, cards: [...deck.cards, newCard] };
+      updatedDeck = { ...deck, cards: [...deck.cards, newCard] };
+      return updatedDeck;
     };
     setSavedDecks(prev => prev.map(updater));
     if (currentDeck?.id === deckId) {
       setCurrentDeck(prev => (prev ? updater(prev) : null));
     }
     showToast('Card added to deck', 'success');
+
+    if (firebaseUser && updatedDeck) {
+      try {
+        const docRef = doc(db, 'flashcard_decks', deckId);
+        await setDoc(docRef, { ...(updatedDeck as FlashcardDeck), userId: firebaseUser.uid }, { merge: true });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `flashcard_decks/${deckId}`);
+      }
+    }
   };
 
   return (

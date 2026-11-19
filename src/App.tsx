@@ -15,8 +15,10 @@ import { QuizGeneratorView } from './components/views/QuizGeneratorView';
 import { RevisionNotesView } from './components/views/RevisionNotesView';
 import { FlashcardsView } from './components/views/FlashcardsView';
 import { AIConceptsView } from './components/views/AIConceptsView';
+import { ThreeDLabView } from './components/views/ThreeDLabView';
 import { StudyLibraryView } from './components/views/StudyLibraryView';
 import { ProfileSettingsView } from './components/views/ProfileSettingsView';
+import { GeminiChatbotDrawer } from './components/chat/GeminiChatbotDrawer';
 
 const MainWorkspace: React.FC = () => {
   const { activePage, setActivePage } = useStudy();
@@ -47,6 +49,8 @@ const MainWorkspace: React.FC = () => {
         return <FlashcardsView />;
       case 'ai-concepts':
         return <AIConceptsView />;
+      case '3d-lab':
+        return <ThreeDLabView />;
       case 'study-library':
         return <StudyLibraryView />;
       case 'profile-settings':
@@ -57,7 +61,7 @@ const MainWorkspace: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors selection:bg-blue-500 selection:text-white">
+    <div className="min-h-screen flex flex-col bg-white dark:bg-slate-950 text-zinc-950 dark:text-slate-100 transition-colors selection:bg-blue-600 selection:text-white">
       {/* Top Navbar */}
       <Navbar onOpenAuth={() => setIsAuthOpen(true)} />
 
@@ -74,6 +78,9 @@ const MainWorkspace: React.FC = () => {
 
       {/* Global Toast Alerts */}
       <ToastContainer />
+
+      {/* Global Multi-turn Gemini AI Chatbot Drawer */}
+      <GeminiChatbotDrawer />
     </div>
   );
 };

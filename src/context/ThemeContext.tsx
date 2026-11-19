@@ -10,7 +10,7 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-const THEME_STORAGE_KEY = 'ai_study_buddy_theme';
+const THEME_STORAGE_KEY = 'apnabhai_theme_v2';
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [theme, setTheme] = useState<ThemeMode>(() => {
@@ -20,16 +20,16 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } catch (e) {
       console.warn(e);
     }
-    return 'dark'; // Default to modern sleek dark educational mode
+    return 'light'; // Default to bright, vibrant light theme for students
   });
 
-  const [isDark, setIsDark] = useState<boolean>(true);
+  const [isDark, setIsDark] = useState<boolean>(false);
 
   useEffect(() => {
     localStorage.setItem(THEME_STORAGE_KEY, theme);
     const root = document.documentElement;
 
-    let computedDark = true;
+    let computedDark = false;
     if (theme === 'light') {
       computedDark = false;
     } else if (theme === 'dark') {

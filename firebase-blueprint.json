@@ -1,0 +1,84 @@
+{
+  "entities": {
+    "UserProfile": {
+      "collection": "users",
+      "fields": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "photoURL": { "type": "string", "description": "Profile picture URL" },
+        "studyGoalHours": { "type": "number", "description": "Daily study goal in hours" },
+        "streakDays": { "type": "number", "description": "Active study streak in days" },
+        "totalMinutesStudied": { "type": "number", "description": "Total study minutes logged" },
+        "createdAt": { "type": "string", "description": "Account creation ISO timestamp" },
+        "updatedAt": { "type": "string", "description": "Last update ISO timestamp" }
+      }
+    },
+    "RevisionNote": {
+      "collection": "notes",
+      "fields": {
+        "id": { "type": "string", "description": "Unique note identifier" },
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "title": { "type": "string", "description": "Note title" },
+        "topic": { "type": "string", "description": "Subject topic" },
+        "subject": { "type": "string", "description": "Academic course subject" },
+        "detailLevel": { "type": "string", "description": "Detail depth level" },
+        "overview": { "type": "string", "description": "High-level summary" },
+        "sections": { "type": "array", "description": "Array of sections with headings and contents" },
+        "keyDefinitions": { "type": "array", "description": "Array of vocabulary terms and definitions" },
+        "formulasAndTheorems": { "type": "array", "description": "Key formulas or theorems" },
+        "examQuickTips": { "type": "array", "description": "High-yield examination tips" },
+        "summary": { "type": "string", "description": "Final synthesis" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "lastEditedAt": { "type": "string", "description": "Last modified timestamp" }
+      }
+    },
+    "Quiz": {
+      "collection": "quizzes",
+      "fields": {
+        "id": { "type": "string", "description": "Unique quiz ID" },
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "topic": { "type": "string", "description": "Topic assessed" },
+        "difficulty": { "type": "string", "description": "Quiz difficulty" },
+        "questions": { "type": "array", "description": "List of questions with options and explanations" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      }
+    },
+    "QuizAttempt": {
+      "collection": "quiz_attempts",
+      "fields": {
+        "id": { "type": "string", "description": "Attempt unique ID" },
+        "userId": { "type": "string", "description": "User UID who took the quiz" },
+        "quizId": { "type": "string", "description": "Referenced Quiz ID" },
+        "topic": { "type": "string", "description": "Topic tested" },
+        "score": { "type": "number", "description": "Points earned" },
+        "totalPoints": { "type": "number", "description": "Total achievable points" },
+        "percentage": { "type": "number", "description": "Score percentage" },
+        "answers": { "type": "map", "description": "Map of questionId to selected answers" },
+        "completedAt": { "type": "string", "description": "Completion timestamp" }
+      }
+    },
+    "FlashcardDeck": {
+      "collection": "flashcard_decks",
+      "fields": {
+        "id": { "type": "string", "description": "Unique deck identifier" },
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "topic": { "type": "string", "description": "Subject topic" },
+        "cards": { "type": "array", "description": "Array of flashcards with questions, answers, and tags" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      }
+    },
+    "ChatMessage": {
+      "collection": "chat_messages",
+      "fields": {
+        "id": { "type": "string", "description": "Message ID" },
+        "userId": { "type": "string", "description": "Owner UID" },
+        "role": { "type": "string", "description": "'user' or 'model'" },
+        "content": { "type": "string", "description": "Message content" },
+        "model": { "type": "string", "description": "Model used e.g. gemini-4-carbon" },
+        "systemRole": { "type": "string", "description": "Persona selected e.g. Socratic Tutor" },
+        "timestamp": { "type": "string", "description": "Timestamp" }
+      }
+    }
+  }
+}

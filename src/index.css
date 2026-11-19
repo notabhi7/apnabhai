@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   :root {
@@ -20,8 +21,8 @@
 /* Light / Dark Mode classes */
 .light {
   color-scheme: light;
-  background-color: #f8fafc;
-  color: #0f172a;
+  background-color: #ffffff;
+  color: #09090b;
 }
 
 .dark {
@@ -59,23 +60,15 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.35);
+  background: rgba(113, 113, 122, 0.3);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.6);
+  background: rgba(113, 113, 122, 0.55);
 }
 
-/* Soft Blue and Violet Glows */
-.glow-blue {
-  box-shadow: 0 0 25px -4px rgba(59, 130, 246, 0.25);
-}
-
-.glow-violet {
-  box-shadow: 0 0 25px -4px rgba(139, 92, 246, 0.25);
-}
-
-.glow-card {
-  box-shadow: 0 10px 30px -10px rgba(99, 102, 241, 0.08);
+/* Crisp Editorial Lift Shadow */
+.lift-shadow {
+  box-shadow: 0 20px 50px -15px rgba(9, 9, 11, 0.08), 0 4px 16px -4px rgba(9, 9, 11, 0.04);
 }

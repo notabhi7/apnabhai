@@ -168,7 +168,7 @@ export const AIConceptsView: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                       {activeLesson.comparisonTable.map((row, i) => (
-                        <tr key={i} className="hover:bg-slate-50/50 dark:hover:bg-slate-850/50">
+                        <tr key={i} className="hover:bg-sky-50/60 dark:hover:bg-slate-800/50">
                           <td className="p-2.5 font-semibold text-slate-900 dark:text-white">
                             {row.feature}
                           </td>

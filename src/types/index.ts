@@ -18,6 +18,7 @@ export type PageView =
   | 'revision-notes'
   | 'flashcards'
   | 'ai-concepts'
+  | '3d-lab'
   | 'study-library'
   | 'profile-settings';
 
